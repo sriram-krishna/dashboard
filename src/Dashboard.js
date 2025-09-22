@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ComposedChart, ScatterChart, Scatter, RadialBarChart, RadialBar } from 'recharts';
+import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, ScatterChart, Scatter, RadialBarChart, RadialBar } from 'recharts';
 import { Activity, AlertTriangle, Cpu, TrendingUp, TrendingDown, Zap, Shield, Clock, BarChart3, Gauge, AlertCircle, Upload, RefreshCw, Box, ChevronUp, ChevronDown, Settings, Users, Power, Timer, Database, Wifi, Signal, Menu, X, Target, Wrench, Battery } from 'lucide-react';
 import Papa from 'papaparse';
 import _ from 'lodash';
@@ -270,17 +270,26 @@ const Dashboard = () => {
     if (!data.length) return {};
     
     const machineData = _.groupBy(data, 'device_id');
+    const timeWindowHours = (() => {
+      switch (selectedTimeRange) {
+        case '24h': return 24;
+        case '7d': return 7 * 24;
+        case '30d': return 30 * 24;
+        default: return 7 * 24; // Default to 7 days
+      }
+    })();
+    
     const idleActiveData = Object.entries(machineData).map(([device, records]) => {
       const runtime = _.sumBy(records, 'runtime_hours') || 0;
-      const timeWindow = parseFloat(selectedTimeRange.replace(/[^0-9]/g, '')) || 7;
-      const totalTime = timeWindow * 24;
-      const idleTime = Math.max(0, totalTime - runtime);
+      const idleTime = Math.max(0, timeWindowHours - runtime);
+      const utilization = timeWindowHours > 0 ? (runtime / timeWindowHours) * 100 : 0;
       
       return {
         device: device.slice(-8),
         activeTime: parseFloat(runtime.toFixed(1)),
         idleTime: parseFloat(idleTime.toFixed(1)),
-        utilization: parseFloat(((runtime / totalTime) * 100).toFixed(1))
+        utilization: parseFloat(utilization.toFixed(1)),
+        totalTime: timeWindowHours
       };
     }).sort((a, b) => b.activeTime - a.activeTime);
     
@@ -786,34 +795,115 @@ const Dashboard = () => {
               Performance Analytics
             </h2>
             
-            {/* Performance Trends Chart */}
-            <div className="rounded-xl p-6 mb-6 backdrop-blur-lg" style={{ 
-              background: theme.card,
-              border: `1px solid ${theme.border}`,
-              boxShadow: theme.shadows.md,
-              height: '400px'
-            }}>
-              <h3 className="text-lg font-bold mb-4" style={{ color: theme.text.primary }}>
-                Performance Trends & Key Metrics
-              </h3>
-              <ResponsiveContainer width="100%" height="85%">
-                <ComposedChart data={usageMetrics.performanceTrends} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                  <defs>
-                    <linearGradient id="cyclesGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={theme.colors.primary} stopOpacity={0.8} />
-                      <stop offset="100%" stopColor={theme.colors.primary} stopOpacity={0.3} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
-                  <XAxis dataKey="date" stroke={theme.text.muted} tick={{ fontSize: 12 }} />
-                  <YAxis yAxisId="left" stroke={theme.text.muted} tick={{ fontSize: 12 }} />
-                  <YAxis yAxisId="right" orientation="right" stroke={theme.text.muted} tick={{ fontSize: 12 }} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Bar yAxisId="left" dataKey="cycles" fill="url(#cyclesGradient)" radius={[4, 4, 0, 0]} name="Cycles" />
-                  <Line yAxisId="right" type="monotone" dataKey="runtime" stroke={theme.colors.success} strokeWidth={3} dot={{ r: 5, fill: theme.colors.success }} name="Runtime (hrs)" />
-                  <Line yAxisId="right" type="monotone" dataKey="energy" stroke={theme.colors.warning} strokeWidth={3} dot={{ r: 5, fill: theme.colors.warning }} name="Energy (kWh)" />
-                </ComposedChart>
-              </ResponsiveContainer>
+            {/* Performance Trends Chart - Split into two charts for better visibility */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+              {/* Cycles and Runtime Chart */}
+              <div className="rounded-xl p-6 backdrop-blur-lg" style={{ 
+                background: theme.card,
+                border: `1px solid ${theme.border}`,
+                boxShadow: theme.shadows.md,
+                height: '400px'
+              }}>
+                <div className="mb-4">
+                  <h3 className="text-lg font-bold mb-2" style={{ color: theme.text.primary }}>
+                    Daily Cycles & Runtime
+                  </h3>
+                  <p className="text-sm" style={{ color: theme.text.muted }}>
+                    Daily cycle counts (bars) and total runtime hours (line) - both metrics use similar scales
+                  </p>
+                </div>
+                <ResponsiveContainer width="100%" height="80%">
+                  <ComposedChart data={usageMetrics.performanceTrends} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
+                    <defs>
+                      <linearGradient id="cyclesGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={theme.colors.primary} stopOpacity={0.8} />
+                        <stop offset="100%" stopColor={theme.colors.primary} stopOpacity={0.3} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
+                    <XAxis 
+                      dataKey="date" 
+                      stroke={theme.text.muted} 
+                      tick={{ fontSize: 12 }}
+                      label={{ value: 'Date', position: 'insideBottom', offset: -10, style: { textAnchor: 'middle', fill: theme.text.muted } }}
+                    />
+                    <YAxis 
+                      yAxisId="left" 
+                      stroke={theme.text.muted} 
+                      tick={{ fontSize: 12 }}
+                      label={{ value: 'Cycle Count', angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: theme.text.muted } }}
+                    />
+                    <YAxis 
+                      yAxisId="right" 
+                      orientation="right" 
+                      stroke={theme.text.muted} 
+                      tick={{ fontSize: 12 }}
+                      label={{ value: 'Runtime Hours', angle: 90, position: 'insideRight', style: { textAnchor: 'middle', fill: theme.text.muted } }}
+                    />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Legend 
+                      wrapperStyle={{ color: theme.text.secondary, fontSize: '12px', paddingTop: '15px' }}
+                      iconType="line"
+                    />
+                    <Bar yAxisId="left" dataKey="cycles" fill="url(#cyclesGradient)" radius={[4, 4, 0, 0]} name="Daily Cycles" />
+                    <Line yAxisId="right" type="monotone" dataKey="runtime" stroke={theme.colors.success} strokeWidth={3} dot={{ r: 5, fill: theme.colors.success }} name="Runtime (hrs)" />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Energy Consumption Chart */}
+              <div className="rounded-xl p-6 backdrop-blur-lg" style={{ 
+                background: theme.card,
+                border: `1px solid ${theme.border}`,
+                boxShadow: theme.shadows.md,
+                height: '400px'
+              }}>
+                <div className="mb-4">
+                  <h3 className="text-lg font-bold mb-2" style={{ color: theme.text.primary }}>
+                    Energy Consumption & Efficiency
+                  </h3>
+                  <p className="text-sm" style={{ color: theme.text.muted }}>
+                    Daily energy consumption (kWh) and bales produced showing operational efficiency
+                  </p>
+                </div>
+                <ResponsiveContainer width="100%" height="80%">
+                  <ComposedChart data={usageMetrics.performanceTrends} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
+                    <defs>
+                      <linearGradient id="energyGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={theme.colors.warning} stopOpacity={0.8} />
+                        <stop offset="100%" stopColor={theme.colors.warning} stopOpacity={0.3} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
+                    <XAxis 
+                      dataKey="date" 
+                      stroke={theme.text.muted} 
+                      tick={{ fontSize: 12 }}
+                      label={{ value: 'Date', position: 'insideBottom', offset: -10, style: { textAnchor: 'middle', fill: theme.text.muted } }}
+                    />
+                    <YAxis 
+                      yAxisId="left" 
+                      stroke={theme.text.muted} 
+                      tick={{ fontSize: 12 }}
+                      label={{ value: 'Energy (kWh)', angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: theme.text.muted } }}
+                    />
+                    <YAxis 
+                      yAxisId="right" 
+                      orientation="right" 
+                      stroke={theme.text.muted} 
+                      tick={{ fontSize: 12 }}
+                      label={{ value: 'Bales Produced', angle: 90, position: 'insideRight', style: { textAnchor: 'middle', fill: theme.text.muted } }}
+                    />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Legend 
+                      wrapperStyle={{ color: theme.text.secondary, fontSize: '12px', paddingTop: '15px' }}
+                      iconType="line"
+                    />
+                    <Area yAxisId="left" dataKey="energy" fill="url(#energyGradient)" stroke={theme.colors.warning} strokeWidth={2} name="Energy (kWh)" />
+                    <Line yAxisId="right" type="monotone" dataKey="bales" stroke={theme.colors.teal} strokeWidth={3} dot={{ r: 5, fill: theme.colors.teal }} name="Bales Produced" />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
             </div>
 
             {/* Machine Health Trends */}
@@ -821,17 +911,35 @@ const Dashboard = () => {
               background: theme.card,
               border: `1px solid ${theme.border}`,
               boxShadow: theme.shadows.md,
-              height: '350px'
+              height: '400px'
             }}>
-              <h3 className="text-lg font-bold mb-4" style={{ color: theme.text.primary }}>
-                Machine Health Trends
-              </h3>
+              <div className="mb-4">
+                <h3 className="text-lg font-bold mb-2" style={{ color: theme.text.primary }}>
+                  Machine Health Trends
+                </h3>
+                <p className="text-sm" style={{ color: theme.text.muted }}>
+                  Key health indicators showing electrical imbalance, hydraulic pressure stability, and cycle time performance over time
+                </p>
+              </div>
               <ResponsiveContainer width="100%" height="85%">
-                <LineChart data={healthMetrics.trendData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                <LineChart data={healthMetrics.trendData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
-                  <XAxis dataKey="date" stroke={theme.text.muted} tick={{ fontSize: 12 }} />
-                  <YAxis stroke={theme.text.muted} tick={{ fontSize: 12 }} />
+                  <XAxis 
+                    dataKey="date" 
+                    stroke={theme.text.muted} 
+                    tick={{ fontSize: 12 }}
+                    label={{ value: 'Date', position: 'insideBottom', offset: -10, style: { textAnchor: 'middle', fill: theme.text.muted } }}
+                  />
+                  <YAxis 
+                    stroke={theme.text.muted} 
+                    tick={{ fontSize: 12 }}
+                    label={{ value: 'Health Metrics (%)', angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: theme.text.muted } }}
+                  />
                   <Tooltip content={<CustomTooltip />} />
+                  <Legend 
+                    wrapperStyle={{ color: theme.text.secondary, fontSize: '12px', paddingTop: '20px' }}
+                    iconType="line"
+                  />
                   <Line type="monotone" dataKey="currentImbalance" stroke={theme.colors.danger} strokeWidth={3} dot={{ r: 5 }} name="Current Imbalance %" />
                   <Line type="monotone" dataKey="pressureOvershoot" stroke={theme.colors.warning} strokeWidth={3} dot={{ r: 5 }} name="Pressure Overshoot %" />
                   <Line type="monotone" dataKey="cycleTimeDrift" stroke={theme.colors.purple} strokeWidth={3} dot={{ r: 5 }} name="Cycle Time Drift %" />
@@ -944,7 +1052,7 @@ const Dashboard = () => {
               <Shield className="w-6 h-6" style={{ color: theme.colors.danger }} />
               Safety & Health Monitoring
             </h2>
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
               
               {/* Safety Metrics */}
               <div className="rounded-xl p-6 backdrop-blur-lg" style={{ 
@@ -970,6 +1078,47 @@ const Dashboard = () => {
                     <div className="text-xs font-semibold mb-2" style={{ color: theme.colors.purple }}>VALVE ISSUES</div>
                     <div className="text-3xl font-bold" style={{ color: theme.colors.purple }}>{safetyMetrics.valveIssues}</div>
                   </div>
+                </div>
+              </div>
+
+              {/* Error Trends Chart */}
+              <div className="rounded-xl p-6 backdrop-blur-lg" style={{ 
+                background: theme.card,
+                border: `1px solid ${theme.border}`,
+                boxShadow: theme.shadows.md
+              }}>
+                <div className="mb-4">
+                  <h3 className="text-lg font-bold mb-2" style={{ color: theme.text.primary }}>Error Trends Over Time</h3>
+                  <p className="text-sm" style={{ color: theme.text.muted }}>
+                    Daily safety incident tracking: E-stops, overloads, door/gate violations, and valve failures
+                  </p>
+                </div>
+                <div style={{ height: '250px' }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={safetyMetrics.errorTrendData} margin={{ top: 5, right: 30, left: 20, bottom: 40 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
+                      <XAxis 
+                        dataKey="date" 
+                        stroke={theme.text.muted} 
+                        tick={{ fontSize: 10 }}
+                        label={{ value: 'Date', position: 'insideBottom', offset: -5, style: { textAnchor: 'middle', fill: theme.text.muted, fontSize: '10px' } }}
+                      />
+                      <YAxis 
+                        stroke={theme.text.muted} 
+                        tick={{ fontSize: 10 }}
+                        label={{ value: 'Error Count', angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: theme.text.muted, fontSize: '10px' } }}
+                      />
+                      <Tooltip content={<CustomTooltip />} />
+                      <Legend 
+                        wrapperStyle={{ color: theme.text.secondary, fontSize: '11px', paddingTop: '10px' }}
+                        iconType="line"
+                      />
+                      <Line type="monotone" dataKey="eStops" stroke={theme.colors.danger} strokeWidth={2} dot={{ r: 3 }} name="E-Stops" />
+                      <Line type="monotone" dataKey="overloads" stroke={theme.colors.orange} strokeWidth={2} dot={{ r: 3 }} name="Overloads" />
+                      <Line type="monotone" dataKey="doorGate" stroke={theme.colors.warning} strokeWidth={2} dot={{ r: 3 }} name="Door/Gate" />
+                      <Line type="monotone" dataKey="valveIssues" stroke={theme.colors.purple} strokeWidth={2} dot={{ r: 3 }} name="Valve Issues" />
+                    </LineChart>
+                  </ResponsiveContainer>
                 </div>
               </div>
 
@@ -1000,34 +1149,57 @@ const Dashboard = () => {
                 </div>
               </div>
 
-              {/* Anomaly Detection */}
+              {/* Anomaly Detection with Trends */}
               <div className="rounded-xl p-6 backdrop-blur-lg" style={{ 
                 background: theme.card,
                 border: `1px solid ${theme.border}`,
                 boxShadow: theme.shadows.md
               }}>
-                <h3 className="text-lg font-bold mb-4" style={{ color: theme.text.primary }}>Anomaly Detection</h3>
-                <div className="grid grid-cols-2 gap-4 mb-4">
-                  <div className="text-center p-4 rounded-xl" style={{ background: theme.glass }}>
-                    <div className="text-3xl font-bold" style={{ color: theme.colors.danger }}>{anomalyMetrics.avgAnomalyScore}%</div>
-                    <div className="text-xs font-semibold" style={{ color: theme.text.secondary }}>AVG ANOMALY SCORE</div>
+                <h3 className="text-lg font-bold mb-4" style={{ color: theme.text.primary }}>Anomaly Analysis</h3>
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  <div className="text-center p-3 rounded-xl" style={{ background: theme.glass }}>
+                    <div className="text-2xl font-bold" style={{ color: theme.colors.danger }}>{anomalyMetrics.avgAnomalyScore}%</div>
+                    <div className="text-xs font-semibold" style={{ color: theme.text.secondary }}>AVG SCORE</div>
                   </div>
-                  <div className="text-center p-4 rounded-xl" style={{ background: theme.glass }}>
-                    <div className="text-3xl font-bold" style={{ color: theme.colors.orange }}>{anomalyMetrics.anomalyCount}</div>
-                    <div className="text-xs font-semibold" style={{ color: theme.text.secondary }}>ANOMALIES DETECTED</div>
+                  <div className="text-center p-3 rounded-xl" style={{ background: theme.glass }}>
+                    <div className="text-2xl font-bold" style={{ color: theme.colors.orange }}>{anomalyMetrics.anomalyCount}</div>
+                    <div className="text-xs font-semibold" style={{ color: theme.text.secondary }}>DETECTED</div>
                   </div>
                 </div>
+                
+                {/* Mini Anomaly Trend Chart */}
+                <div style={{ height: '120px' }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={anomalyMetrics.anomalyTrendData} margin={{ top: 5, right: 5, left: 5, bottom: 25 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
+                      <XAxis 
+                        dataKey="date" 
+                        stroke={theme.text.muted} 
+                        tick={{ fontSize: 9 }}
+                        label={{ value: 'Date', position: 'insideBottom', offset: -5, style: { textAnchor: 'middle', fill: theme.text.muted, fontSize: '8px' } }}
+                      />
+                      <YAxis 
+                        stroke={theme.text.muted} 
+                        tick={{ fontSize: 9 }}
+                        label={{ value: 'Count', angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: theme.text.muted, fontSize: '8px' } }}
+                      />
+                      <Tooltip content={<CustomTooltip />} />
+                      <Line type="monotone" dataKey="anomalies" stroke={theme.colors.danger} strokeWidth={2} dot={{ r: 2 }} name="Anomaly Count" />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+                
                 {anomalyMetrics.highAnomalyMachines?.length > 0 && (
-                  <div>
-                    <div className="text-sm font-semibold mb-3" style={{ color: theme.colors.danger }}>⚠️ High Risk Machines</div>
-                    <div className="space-y-2">
-                      {anomalyMetrics.highAnomalyMachines.slice(0, 3).map(machine => (
-                        <div key={machine.device} className="flex justify-between text-sm p-3 rounded-lg" style={{ 
+                  <div className="mt-4">
+                    <div className="text-xs font-semibold mb-2" style={{ color: theme.colors.danger }}>⚠️ High Risk Machines</div>
+                    <div className="space-y-1">
+                      {anomalyMetrics.highAnomalyMachines.slice(0, 2).map(machine => (
+                        <div key={machine.device} className="flex justify-between text-xs p-2 rounded-lg" style={{ 
                           background: `${theme.colors.danger}20`,
                           border: `1px solid ${theme.colors.danger}40`
                         }}>
-                          <span style={{ color: theme.text.primary }}>{machine.device.slice(-10)}</span>
-                          <span style={{ color: theme.colors.danger }}>{machine.anomalyCount} alerts</span>
+                          <span style={{ color: theme.text.primary }}>{machine.device.slice(-8)}</span>
+                          <span style={{ color: theme.colors.danger }}>{machine.anomalyCount}</span>
                         </div>
                       ))}
                     </div>
@@ -1051,9 +1223,20 @@ const Dashboard = () => {
                 border: `1px solid ${theme.border}`,
                 boxShadow: theme.shadows.md
               }}>
-                <h3 className="text-lg font-bold mb-4" style={{ color: theme.text.primary }}>
-                  Utilization Heatmap (Hour × Day)
-                </h3>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-bold" style={{ color: theme.text.primary }}>
+                    Utilization Heatmap (Hour × Day)
+                  </h3>
+                  <div className="flex items-center gap-2 text-xs" style={{ color: theme.text.muted }}>
+                    <span>Low</span>
+                    <div className="flex gap-1">
+                      <div className="w-3 h-3 rounded-sm" style={{ background: theme.colors.primary, opacity: 0.3 }}></div>
+                      <div className="w-3 h-3 rounded-sm" style={{ background: theme.colors.primary, opacity: 0.6 }}></div>
+                      <div className="w-3 h-3 rounded-sm" style={{ background: theme.colors.primary, opacity: 1.0 }}></div>
+                    </div>
+                    <span>High</span>
+                  </div>
+                </div>
                 <div style={{ height: '300px' }}>
                   <div className="grid gap-1 h-full" style={{ 
                     gridTemplateColumns: 'auto repeat(24, 1fr)',
@@ -1108,6 +1291,10 @@ const Dashboard = () => {
                       <XAxis type="number" stroke={theme.text.muted} tick={{ fontSize: 11 }} />
                       <YAxis type="category" dataKey="device" stroke={theme.text.muted} tick={{ fontSize: 10 }} width={55} />
                       <Tooltip content={<CustomTooltip />} />
+                      <Legend 
+                        wrapperStyle={{ color: theme.text.secondary, fontSize: '12px', paddingTop: '15px' }}
+                        iconType="rect"
+                      />
                       <Bar dataKey="activeTime" stackId="a" fill={theme.colors.success} name="Active Time (hrs)" radius={[0, 4, 4, 0]} />
                       <Bar dataKey="idleTime" stackId="a" fill={theme.colors.danger} name="Idle Time (hrs)" radius={[4, 0, 0, 4]} />
                     </BarChart>
