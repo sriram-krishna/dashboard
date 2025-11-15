@@ -1,1377 +1,968 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, ScatterChart, Scatter, RadialBarChart, RadialBar } from 'recharts';
-import { Activity, AlertTriangle, Cpu, TrendingUp, TrendingDown, Zap, Shield, Clock, BarChart3, Gauge, AlertCircle, Upload, RefreshCw, Box, ChevronUp, ChevronDown, Settings, Users, Power, Timer, Database, Wifi, Signal, Menu, X, Target, Wrench, Battery } from 'lucide-react';
-import Papa from 'papaparse';
-import _ from 'lodash';
+import React, { useState } from 'react';
+import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Area, AreaChart, ComposedChart } from 'recharts';
 
-const Dashboard = () => {
-  const [data, setData] = useState([]);
-  const [originalData, setOriginalData] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedDevice, setSelectedDevice] = useState('all');
-  const [selectedTimeRange, setSelectedTimeRange] = useState('7d');
-  const [errorMessage, setErrorMessage] = useState('');
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const fileInputRef = useRef(null);
+// ============= UTILITY FUNCTIONS =============
+const DataUtils = {
+  parseCSV: (csvText) => {
+    const lines = csvText.trim().split('\n');
+    const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim());
+    
+    return lines.slice(1).map(line => {
+      const values = line.split(',').map(v => v.replace(/"/g, '').trim());
+      const row = {};
+      headers.forEach((header, i) => {
+        row[header] = values[i];
+      });
+      return row;
+    });
+  },
 
-  // Professional dark theme with excellent contrast
-  const theme = {
-    bg: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)',
-    card: 'rgba(30, 41, 59, 0.95)',
-    cardHover: 'rgba(51, 65, 85, 0.95)',
-    glass: 'rgba(255, 255, 255, 0.05)',
-    border: 'rgba(148, 163, 184, 0.2)',
-    borderLight: 'rgba(148, 163, 184, 0.3)',
-    text: {
-      primary: '#f8fafc',
-      secondary: '#e2e8f0',
-      muted: '#94a3b8',
-      accent: '#3b82f6'
-    },
-    colors: {
-      primary: '#3b82f6',      // Blue
-      success: '#10b981',      // Emerald
-      warning: '#f59e0b',      // Amber
-      danger: '#ef4444',       // Red
-      info: '#06b6d4',         // Cyan
-      purple: '#8b5cf6',       // Violet
-      teal: '#14b8a6',         // Teal
-      orange: '#f97316',       // Orange
-      indigo: '#6366f1'        // Indigo
-    },
-    gradients: {
-      primary: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
-      success: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-      warning: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
-      danger: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
-      purple: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
-      teal: 'linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)'
-    },
-    chart: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6', '#f97316', '#6366f1'],
-    shadows: {
-      sm: '0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 1px 2px 0 rgba(0, 0, 0, 0.3)',
-      md: '0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.3)',
-      lg: '0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -2px rgba(0, 0, 0, 0.4)',
-      glow: '0 0 20px rgba(59, 130, 246, 0.4)'
-    }
-  };
+  processByDay: (data) => {
+    const dayData = {};
+    
+    data.forEach(row => {
+      const date = new Date(row.Time);
+      const dayKey = date.toISOString().split('T')[0];
+      
+      if (!dayData[dayKey]) {
+        dayData[dayKey] = [];
+      }
+      
+      dayData[dayKey].push({
+        time: row.Time,
+        timestamp: date,
+        deviceId: row.deviceId,
+        measure: row.measure_name,
+        value: parseFloat(row.measure_value) || 0
+      });
+    });
+    
+    return dayData;
+  },
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  getCycleCountByDay: (processedData) => {
+    return Object.keys(processedData).sort().map(day => {
+      const cycles = processedData[day].filter(d => d.measure === 'cycle.durationS');
+      return {
+        day: new Date(day).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        fullDate: day,
+        count: cycles.length
+      };
+    });
+  },
 
-  useEffect(() => {
-    applyFilters();
-  }, [selectedDevice, selectedTimeRange, originalData]);
+  getEnergyByDay: (processedData) => {
+    return Object.keys(processedData).sort().map(day => {
+      const energyMetrics = processedData[day].filter(d => d.measure === 'energy.totalWh');
+      const perHour = processedData[day].filter(d => d.measure === 'energy.perHourWh');
+      const total = energyMetrics.reduce((sum, m) => sum + m.value, 0);
+      const avgPerHour = perHour.length ? perHour.reduce((sum, m) => sum + m.value, 0) / perHour.length : 0;
+      return {
+        day: new Date(day).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        total,
+        perHour: avgPerHour
+      };
+    });
+  },
 
-  const applyFilters = () => {
-    if (!originalData.length) return;
-    
-    let filtered = [...originalData];
-    
-    if (selectedDevice !== 'all') {
-      filtered = filtered.filter(d => d.device_id === selectedDevice);
-    }
-    
-    const now = new Date(Math.max(...originalData.map(d => new Date(d.cycle_started_at))));
-    let startDate;
-    
-    switch (selectedTimeRange) {
-      case '24h':
-        startDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-        break;
-      case '7d':
-        startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        break;
-      case '30d':
-        startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-        break;
-      default:
-        startDate = new Date(0);
-    }
-    
-    filtered = filtered.filter(d => new Date(d.cycle_started_at) >= startDate);
-    setData(filtered);
-  };
+  getVoltageByDay: (processedData) => {
+    return Object.keys(processedData).sort().map(day => {
+      const u1 = processedData[day].filter(d => d.measure === 'voltage.U1');
+      const u2 = processedData[day].filter(d => d.measure === 'voltage.U2');
+      const u3 = processedData[day].filter(d => d.measure === 'voltage.U3');
+      
+      return {
+        day: new Date(day).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        phase1: u1.length ? u1.reduce((sum, m) => sum + m.value, 0) / u1.length : 0,
+        phase2: u2.length ? u2.reduce((sum, m) => sum + m.value, 0) / u2.length : 0,
+        phase3: u3.length ? u3.reduce((sum, m) => sum + m.value, 0) / u3.length : 0
+      };
+    });
+  },
 
-  const handleFileUpload = async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-    
-    setLoading(true);
-    setErrorMessage('');
-    
-    try {
-      const text = await file.text();
-      processCSVData(text);
-    } catch (error) {
-      console.error('Error reading file:', error);
-      setErrorMessage('Failed to read file.');
-      setLoading(false);
-    }
-  };
+  getCurrentByDay: (processedData) => {
+    return Object.keys(processedData).sort().map(day => {
+      const inrushMax = processedData[day].filter(d => d.measure === 'inrush.maxPeakA');
+      const inrushMean = processedData[day].filter(d => d.measure === 'inrush.meanPeakA');
+      const workCurrent = processedData[day].filter(d => d.measure === 'workCurrent.meanAvgA');
+      
+      return {
+        day: new Date(day).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        inrushMax: inrushMax.length ? inrushMax.reduce((sum, m) => sum + m.value, 0) / inrushMax.length : 0,
+        inrushMean: inrushMean.length ? inrushMean.reduce((sum, m) => sum + m.value, 0) / inrushMean.length : 0,
+        workCurrent: workCurrent.length ? workCurrent.reduce((sum, m) => sum + m.value, 0) / workCurrent.length : 0
+      };
+    });
+  },
 
-  const processCSVData = (csvContent) => {
-    try {
-      const parsed = Papa.parse(csvContent, {
-        header: true,
-        dynamicTyping: true,
-        skipEmptyLines: true,
-        delimitersToGuess: [',', '\t', '|', ';']
+  getRuntimeByDay: (processedData) => {
+    return Object.keys(processedData).sort().map(day => {
+      const durations = processedData[day].filter(d => d.measure === 'cycle.durationS');
+      const totalRuntime = durations.reduce((sum, d) => sum + d.value, 0);
+      const avgDuration = durations.length ? totalRuntime / durations.length : 0;
+      
+      return {
+        day: new Date(day).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        runtime: totalRuntime / 60,
+        cycles: durations.length,
+        avgDuration
+      };
+    });
+  },
+
+  calculateUtilization: (processedData) => {
+    const allCycles = Object.values(processedData).flat().filter(d => d.measure === 'cycle.durationS');
+    const totalCycles = allCycles.length;
+    
+    const optimalCyclesPerDay = (8 * 60) / 2;
+    const days = Object.keys(processedData).length || 1;
+    const actualCyclesPerDay = totalCycles / days;
+    const utilization = Math.min((actualCyclesPerDay / optimalCyclesPerDay) * 100, 100);
+    
+    return Math.round(utilization);
+  },
+
+  calculateChamberFullness: (processedData) => {
+    const allCycles = Object.values(processedData).flat().filter(d => d.measure === 'cycle.durationS');
+    const days = Object.keys(processedData).length || 1;
+    const cyclesPerDay = allCycles.length / days;
+    
+    const low = Math.max(0, Math.min(30, (50 - cyclesPerDay) / 50 * 30));
+    const medium = cyclesPerDay < 50 ? 0 : Math.min(40, (cyclesPerDay - 50) / 100 * 40);
+    const high = cyclesPerDay < 150 ? 0 : Math.min(100, (cyclesPerDay - 150) / 100 * 100);
+    
+    const total = low + medium + high;
+    return {
+      low: total > 0 ? Math.round((low / total) * 100) : 30,
+      medium: total > 0 ? Math.round((medium / total) * 100) : 40,
+      high: total > 0 ? Math.round((high / total) * 100) : 30
+    };
+  },
+
+  detectAnomalies: (processedData) => {
+    const anomalies = [];
+    
+    Object.keys(processedData).forEach(day => {
+      const data = processedData[day];
+      
+      const voltages = data.filter(d => d.measure.startsWith('voltage.U'));
+      voltages.forEach(v => {
+        if (v.value < 110 || v.value > 125) {
+          anomalies.push({
+            date: day,
+            type: 'Voltage Anomaly',
+            severity: v.value < 105 || v.value > 130 ? 'critical' : 'warning',
+            value: v.value,
+            measure: v.measure
+          });
+        }
       });
       
-      if (!parsed.data || parsed.data.length === 0) {
-        throw new Error('Empty CSV file');
+      const temps = data.filter(d => d.measure === 'temperature.ambient');
+      temps.forEach(t => {
+        if (t.value > 35) {
+          anomalies.push({
+            date: day,
+            type: 'Temperature Anomaly',
+            severity: t.value > 40 ? 'critical' : 'warning',
+            value: t.value
+          });
+        }
+      });
+      
+      const inrush = data.filter(d => d.measure === 'inrush.maxPeakA');
+      inrush.forEach(i => {
+        if (i.value > 40) {
+          anomalies.push({
+            date: day,
+            type: 'Inrush Current Anomaly',
+            severity: i.value > 45 ? 'critical' : 'warning',
+            value: i.value
+          });
+        }
+      });
+      
+      const errors = data.filter(d => d.measure === 'DI8_Full_Error' && d.value === 1);
+      if (errors.length > 0) {
+        anomalies.push({
+          date: day,
+          type: 'Error State',
+          severity: 'critical',
+          count: errors.length
+        });
+      }
+    });
+    
+    return anomalies;
+  },
+
+  getAnomalyBreakdown: (processedData) => {
+    const anomalies = DataUtils.detectAnomalies(processedData);
+    const byDay = {};
+    
+    anomalies.forEach(a => {
+      const dayKey = new Date(a.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      if (!byDay[dayKey]) {
+        byDay[dayKey] = { day: dayKey, voltage: 0, temperature: 0, current: 0, error: 0 };
       }
       
-      const processedData = parsed.data.map(row => ({
-        ...row,
-        date: new Date(row.cycle_started_at),
-        dateStr: new Date(row.cycle_started_at).toLocaleDateString(),
-        hour: new Date(row.cycle_started_at).getHours(),
-        dayOfWeek: new Date(row.cycle_started_at).getDay(),
-        runtime_hours: row.cycle_duration_ms / 1000 / 3600,
-        e_stop: row.di_e_stop_triggered === 'True' || row.di_e_stop_triggered === true,
-        overload: row.di_overload_trip === 'True' || row.di_overload_trip === true,
-        valve_issue: row.di_valve_extend_feedback_ok === 'False' || row.di_valve_retract_feedback_ok === 'False',
-        anomaly: row.health_anomaly_score > 0.5,
-        current_imbalance: ((Math.max(row.electrical_peak_current_rms_phase_a_a, row.electrical_peak_current_rms_phase_b_a, row.electrical_peak_current_rms_phase_c_a) - 
-                            Math.min(row.electrical_peak_current_rms_phase_a_a, row.electrical_peak_current_rms_phase_b_a, row.electrical_peak_current_rms_phase_c_a)) / 
-                            ((row.electrical_peak_current_rms_phase_a_a + row.electrical_peak_current_rms_phase_b_a + row.electrical_peak_current_rms_phase_c_a) / 3)) * 100,
-        energy_per_cycle: row.energy_active_kwh,
-        pressure_overshoot: ((row.hydraulic_max_pressure_psi - row.hydraulic_avg_pressure_psi) / row.hydraulic_avg_pressure_psi) * 100
-      })).filter(row => !isNaN(row.date.getTime()));
+      if (a.type.includes('Voltage')) byDay[dayKey].voltage++;
+      else if (a.type.includes('Temperature')) byDay[dayKey].temperature++;
+      else if (a.type.includes('Current')) byDay[dayKey].current++;
+      else if (a.type.includes('Error')) byDay[dayKey].error++;
+    });
+    
+    return Object.values(byDay);
+  },
+
+  calculateDowntime: (processedData) => {
+    return Object.keys(processedData).sort().map(day => {
+      const data = processedData[day];
       
-      setOriginalData(processedData);
-      setData(processedData);
-      setLoading(false);
-      setErrorMessage('');
+      const kmStates = data.filter(d => d.measure === 'DI1_KM').sort((a, b) => a.timestamp - b.timestamp);
       
-    } catch (error) {
-      console.error('Error processing CSV:', error);
-      setErrorMessage(error.message || 'Failed to process CSV');
-      setData([]);
-      setOriginalData([]);
-      setLoading(false);
+      let downMinutes = 0;
+      for (let i = 1; i < kmStates.length; i++) {
+        if (kmStates[i].value === 0) {
+          const timeDiff = (kmStates[i].timestamp - kmStates[i-1].timestamp) / 1000 / 60;
+          downMinutes += timeDiff;
+        }
+      }
+      
+      return {
+        day: new Date(day).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        downtime: downMinutes
+      };
+    });
+  },
+
+  calculateSafetyMetrics: (processedData) => {
+    let eStops = 0;
+    let cycleErrors = 0;
+    let gateViolations = 0;
+    
+    Object.values(processedData).flat().forEach(d => {
+      if (d.measure === 'DI2_ES_Overload_Key' && d.value === 1) eStops++;
+      if (d.measure === 'DI8_Full_Error' && d.value === 1) cycleErrors++;
+      if (d.measure === 'DI3_Gate' && d.value === 0) gateViolations++;
+    });
+    
+    return { eStops, cycleErrors, gateViolations };
+  },
+
+  getDigitalInputTimeline: (processedData) => {
+    const events = [];
+    
+    Object.keys(processedData).sort().slice(-3).forEach(day => {
+      const data = processedData[day];
+      
+      const eStops = data.filter(d => d.measure === 'DI2_ES_Overload_Key' && d.value === 1);
+      const errors = data.filter(d => d.measure === 'DI8_Full_Error' && d.value === 1);
+      const gates = data.filter(d => d.measure === 'DI5_GateDown' && d.value === 1);
+      
+      eStops.forEach(e => events.push({ type: 'Overload', time: e.time, status: 'error' }));
+      errors.forEach(e => events.push({ type: 'Full Error', time: e.time, status: 'error' }));
+      gates.forEach(e => events.push({ type: 'Gate Down', time: e.time, status: 'success' }));
+    });
+    
+    return events.slice(-5);
+  },
+
+  calculateMTBF: (processedData) => {
+    const allData = Object.values(processedData).flat();
+    const errors = allData.filter(d => d.measure === 'DI8_Full_Error' && d.value === 1);
+    const cycles = allData.filter(d => d.measure === 'cycle.durationS');
+    
+    return errors.length > 0 ? Math.round(cycles.length / errors.length) : cycles.length;
+  },
+
+  calculateMTTR: (processedData) => {
+    const allData = Object.values(processedData).flat().sort((a, b) => a.timestamp - b.timestamp);
+    const errors = allData.filter(d => d.measure === 'DI8_Full_Error');
+    
+    let totalRepairTime = 0;
+    let repairCount = 0;
+    
+    for (let i = 1; i < errors.length; i++) {
+      if (errors[i-1].value === 1 && errors[i].value === 0) {
+        const repairTime = (errors[i].timestamp - errors[i-1].timestamp) / 1000 / 60;
+        totalRepairTime += repairTime;
+        repairCount++;
+      }
     }
-  };
+    
+    return repairCount > 0 ? Math.round(totalRepairTime / repairCount) : 20;
+  },
 
-  const loadData = async () => {
-    setLoading(true);
-    setErrorMessage('');
-    
-    try {
-      const response = await fetch('/multi_device_telemetry_7days.csv');
-      if (!response.ok) {
-        throw new Error('Please upload CSV file');
-      }
-      const csvContent = await response.text();
-      processCSVData(csvContent);
-    } catch (error) {
-      console.error('Error loading data:', error);
-      setErrorMessage(error.message);
-      setData([]);
-      setOriginalData([]);
-      setLoading(false);
-    }
-  };
-
-  // Comprehensive Fleet Overview Metrics
-  const fleetMetrics = useMemo(() => {
-    if (!data.length) return {};
-    
-    const totalRuntime = _.sumBy(data, 'runtime_hours');
-    const totalCycles = data.length;
-    const uniqueDevices = _.uniqBy(data, 'device_id').length;
-    
-    const latestDate = new Date(Math.max(...data.map(d => new Date(d.cycle_started_at))));
-    const earliestDate = new Date(Math.min(...data.map(d => new Date(d.cycle_started_at))));
-    const hoursInWindow = Math.max((latestDate - earliestDate) / (1000 * 60 * 60), 1);
-    const utilizationRate = (totalRuntime / (uniqueDevices * hoursInWindow)) * 100;
-    
-    const errorCount = data.filter(d => d.e_stop || d.overload).length;
-    const avgCyclesPerMachine = totalCycles / uniqueDevices;
-    const totalEnergy = _.sumBy(data, 'energy_active_kwh');
-    const totalBales = _.sumBy(data, 'productivity_bale_count_increment') || 0;
-    
-    return {
-      totalRuntime: totalRuntime.toFixed(1),
-      utilizationRate: Math.min(utilizationRate, 100).toFixed(1),
-      totalCycles,
-      errorCount,
-      uniqueDevices,
-      avgCyclesPerMachine: avgCyclesPerMachine.toFixed(1),
-      totalEnergy: totalEnergy.toFixed(1),
-      totalBales
-    };
-  }, [data]);
-
-  // Machine Health Metrics with Trends
-  const healthMetrics = useMemo(() => {
-    if (!data.length) return {};
-    
-    const avgCurrentImbalance = _.meanBy(data, 'current_imbalance');
-    const avgPressureOvershoot = _.meanBy(data, 'pressure_overshoot');
-    const avgEnergyPerCycle = _.meanBy(data, 'energy_per_cycle');
-    
-    const sortedCycleTimes = data.map(d => d.cycle_duration_ms).sort();
-    const baselineCycleTime = sortedCycleTimes[Math.floor(sortedCycleTimes.length / 2)];
-    const cycleTimeDrift = _.meanBy(data, d => ((d.cycle_duration_ms - baselineCycleTime) / baselineCycleTime) * 100);
-    
-    // Health trends for last 7 days
-    const healthTrends = _.groupBy(data, 'dateStr');
-    const trendData = Object.entries(healthTrends).map(([date, records]) => ({
-      date: date.split('/')[0] + '/' + date.split('/')[1],
-      currentImbalance: _.meanBy(records, 'current_imbalance') || 0,
-      pressureOvershoot: _.meanBy(records, 'pressure_overshoot') || 0,
-      cycleTimeDrift: _.meanBy(records, d => ((d.cycle_duration_ms - baselineCycleTime) / baselineCycleTime) * 100) || 0,
-      energyPerCycle: _.meanBy(records, 'energy_per_cycle') || 0
-    })).slice(-7);
-    
-    return {
-      avgCurrentImbalance: (avgCurrentImbalance || 0).toFixed(1),
-      avgPressureOvershoot: (avgPressureOvershoot || 0).toFixed(1),
-      cycleTimeDrift: (cycleTimeDrift || 0).toFixed(1),
-      avgEnergyPerCycle: (avgEnergyPerCycle || 0).toFixed(2),
-      trendData
-    };
-  }, [data]);
-
-  // Safety & Error Metrics
-  const safetyMetrics = useMemo(() => {
-    if (!data.length) return {};
-    
-    const eStopCount = data.filter(d => d.e_stop).length;
-    const overloadCount = data.filter(d => d.overload).length;
-    const doorGateViolations = (_.sumBy(data, 'di_door_open_events') || 0) + (_.sumBy(data, 'di_gate_open_events') || 0);
-    const valveIssues = data.filter(d => d.valve_issue).length;
-    
-    // Error trends over time
-    const errorTrends = _.groupBy(data, 'dateStr');
-    const errorTrendData = Object.entries(errorTrends).map(([date, records]) => ({
-      date: date.split('/')[0] + '/' + date.split('/')[1],
-      eStops: records.filter(r => r.e_stop).length,
-      overloads: records.filter(r => r.overload).length,
-      doorGate: (_.sumBy(records, 'di_door_open_events') || 0) + (_.sumBy(records, 'di_gate_open_events') || 0),
-      valveIssues: records.filter(r => r.valve_issue).length
-    })).slice(-7);
-    
-    return {
-      eStopCount,
-      overloadCount,
-      doorGateViolations,
-      valveIssues,
-      errorTrendData
-    };
-  }, [data]);
-
-  // Usage & Performance Metrics
-  const usageMetrics = useMemo(() => {
-    if (!data.length) return {};
-    
-    const machineData = _.groupBy(data, 'device_id');
-    const timeWindowHours = (() => {
-      switch (selectedTimeRange) {
-        case '24h': return 24;
-        case '7d': return 7 * 24;
-        case '30d': return 30 * 24;
-        default: return 7 * 24; // Default to 7 days
-      }
-    })();
-    
-    const idleActiveData = Object.entries(machineData).map(([device, records]) => {
-      const runtime = _.sumBy(records, 'runtime_hours') || 0;
-      const idleTime = Math.max(0, timeWindowHours - runtime);
-      const utilization = timeWindowHours > 0 ? (runtime / timeWindowHours) * 100 : 0;
-      
-      return {
-        device: device.slice(-8),
-        activeTime: parseFloat(runtime.toFixed(1)),
-        idleTime: parseFloat(idleTime.toFixed(1)),
-        utilization: parseFloat(utilization.toFixed(1)),
-        totalTime: timeWindowHours
-      };
-    }).sort((a, b) => b.activeTime - a.activeTime);
-    
-    // Performance over time
-    const performanceData = _.groupBy(data, 'dateStr');
-    const performanceTrends = Object.entries(performanceData).map(([date, records]) => ({
-      date: date.split('/')[0] + '/' + date.split('/')[1],
-      cycles: records.length,
-      runtime: _.sumBy(records, 'runtime_hours').toFixed(1),
-      energy: _.sumBy(records, 'energy_active_kwh').toFixed(1),
-      bales: _.sumBy(records, 'productivity_bale_count_increment') || 0,
-      avgUtilization: _.meanBy(records, r => (r.runtime_hours / 24) * 100).toFixed(1)
-    })).slice(-7);
-    
-    return {
-      idleActiveData: idleActiveData.slice(0, 8),
-      performanceTrends
-    };
-  }, [data, selectedTimeRange]);
-
-  // Anomaly Detection & Analysis
-  const anomalyMetrics = useMemo(() => {
-    if (!data.length) return {};
-    
-    const anomalyCount = data.filter(d => d.anomaly).length;
-    const avgAnomalyScore = _.meanBy(data, 'health_anomaly_score') || 0;
-    
-    const machineAnomalies = _.groupBy(data.filter(d => d.anomaly), 'device_id');
-    const highAnomalyMachines = Object.entries(machineAnomalies)
-      .filter(([device, anomalies]) => anomalies.length > 3)
-      .map(([device, anomalies]) => ({
-        device,
-        anomalyCount: anomalies.length,
-        avgScore: (_.meanBy(anomalies, 'health_anomaly_score') * 100).toFixed(1),
-        lastAnomaly: Math.max(...anomalies.map(a => new Date(a.cycle_started_at).getTime()))
-      }))
-      .sort((a, b) => b.lastAnomaly - a.lastAnomaly);
-    
-    // Anomaly trends
-    const anomalyTrends = _.groupBy(data, 'dateStr');
-    const anomalyTrendData = Object.entries(anomalyTrends).map(([date, records]) => ({
-      date: date.split('/')[0] + '/' + date.split('/')[1],
-      anomalies: records.filter(r => r.anomaly).length,
-      avgScore: (_.meanBy(records, 'health_anomaly_score') * 100) || 0
-    })).slice(-7);
-    
-    return {
-      anomalyCount,
-      avgAnomalyScore: (avgAnomalyScore * 100).toFixed(1),
-      highAnomalyMachines: highAnomalyMachines.slice(0, 5),
-      anomalyTrendData
-    };
-  }, [data]);
-
-  // EOL Planning & Maintenance
-  const eolMetrics = useMemo(() => {
-    if (!data.length) return {};
-    
-    const machineData = _.groupBy(data, 'device_id');
-    const eolData = Object.entries(machineData).map(([device, records]) => {
-      const lifetimeCycles = records.length * 52; // Extrapolate to yearly
-      const eolThreshold = 50000;
-      const remainingLife = Math.max(0, ((eolThreshold - lifetimeCycles) / eolThreshold * 100));
-      const errorCount = records.filter(r => r.e_stop || r.overload).length;
-      const runtime = _.sumBy(records, 'runtime_hours') || 0;
-      const mtbf = errorCount > 0 ? runtime / errorCount : runtime;
-      const mttr = errorCount > 0 ? 2.5 : 0; // Estimated average repair time
-      
-      return {
-        device,
-        lifetimeCycles,
-        remainingLife: remainingLife.toFixed(1),
-        mtbf: mtbf.toFixed(1),
-        mttr: mttr.toFixed(1),
-        isNearEOL: remainingLife < 10 || (_.meanBy(records, 'health_anomaly_score') || 0) > 0.7
-      };
-    }).sort((a, b) => parseFloat(a.remainingLife) - parseFloat(b.remainingLife));
-    
-    const avgMTBF = _.meanBy(eolData, d => parseFloat(d.mtbf)) || 0;
-    const avgMTTR = _.meanBy(eolData, d => parseFloat(d.mttr)) || 0;
-    const eolMachines = eolData.filter(d => d.isNearEOL);
-    
-    return {
-      avgMTBF: avgMTBF.toFixed(1),
-      avgMTTR: avgMTTR.toFixed(1),
-      eolMachines: eolMachines.slice(0, 5),
-      avgRemainingLife: (_.meanBy(eolData, d => parseFloat(d.remainingLife)) || 0).toFixed(1),
-      totalMachines: eolData.length
-    };
-  }, [data]);
-
-  // Machine Rankings
-  const machineRankings = useMemo(() => {
-    if (!data.length) return { top5: [], bottom5: [] };
-    
-    const grouped = _.groupBy(data, 'device_id');
-    const machines = Object.entries(grouped).map(([device, records]) => {
-      const runtime = _.sumBy(records, 'runtime_hours') || 0;
-      const errors = records.filter(r => r.e_stop || r.overload).length;
-      const efficiency = errors > 0 ? runtime / errors : runtime;
-      
-      return {
-        device,
-        runtime: runtime.toFixed(1),
-        cycles: records.length,
-        energy: (_.sumBy(records, 'energy_active_kwh') || 0).toFixed(1),
-        errors,
-        efficiency: efficiency.toFixed(1),
-        utilization: ((runtime / (7 * 24)) * 100).toFixed(1),
-        status: errors > 0 ? 'Warning' : 'Healthy'
-      };
-    }).sort((a, b) => parseFloat(b.runtime) - parseFloat(a.runtime));
-    
-    return {
-      top5: machines.slice(0, 5),
-      bottom5: machines.slice(-5).reverse()
-    };
-  }, [data]);
-
-  // Utilization Heatmap Data
-  const heatmapData = useMemo(() => {
-    if (!data.length) return { days: [], hours: [], data: [] };
-    
-    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const hours = Array.from({ length: 24 }, (_, i) => i);
+  getUtilizationHeatmap: (processedData) => {
     const heatmap = {};
     
-    days.forEach((day, dayIndex) => {
-      hours.forEach(hour => {
-        heatmap[`${dayIndex}-${hour}`] = 0;
-      });
-    });
-    
-    data.forEach(record => {
-      const key = `${record.dayOfWeek}-${record.hour}`;
-      heatmap[key] += record.runtime_hours;
-    });
-    
-    const maxValue = Math.max(...Object.values(heatmap));
-    const heatmapArray = [];
-    
-    days.forEach((day, dayIndex) => {
-      hours.forEach(hour => {
-        const value = heatmap[`${dayIndex}-${hour}`];
-        heatmapArray.push({
-          day: dayIndex,
-          hour,
-          dayName: day,
-          value,
-          intensity: maxValue > 0 ? (value / maxValue) * 100 : 0
-        });
-      });
-    });
-    
-    return { days, hours, data: heatmapArray };
-  }, [data]);
-
-  const uniqueDevices = useMemo(() => {
-    return _.uniqBy(originalData, 'device_id').map(d => d.device_id).sort();
-  }, [originalData]);
-
-  if (loading) {
-    return (
-      <div className="h-screen flex items-center justify-center" style={{ background: theme.bg }}>
-        <div className="text-center p-8 rounded-2xl backdrop-blur-lg" style={{ 
-          background: theme.glass,
-          border: `1px solid ${theme.border}`,
-          boxShadow: theme.shadows.lg
-        }}>
-          <div className="relative mb-6">
-            <div className="animate-spin rounded-full h-20 w-20 mx-auto" style={{ 
-              background: theme.gradients.primary,
-              mask: 'radial-gradient(transparent 30%, black 31%)',
-              WebkitMask: 'radial-gradient(transparent 30%, black 31%)'
-            }}></div>
-            <Activity className="absolute top-6 left-1/2 transform -translate-x-1/2 w-8 h-8" style={{ color: theme.colors.primary }} />
-          </div>
-          <div className="text-xl font-semibold mb-2" style={{ color: theme.text.primary }}>
-            Processing Telemetry Data
-          </div>
-          <div className="text-sm" style={{ color: theme.text.muted }}>
-            Analyzing industrial metrics and performance indicators...
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (!loading && originalData.length === 0) {
-    return (
-      <div className="h-screen flex items-center justify-center p-4" style={{ background: theme.bg }}>
-        <div className="text-center p-12 rounded-2xl backdrop-blur-lg max-w-md mx-auto" style={{ 
-          background: theme.glass,
-          border: `1px solid ${theme.border}`,
-          boxShadow: theme.shadows.lg
-        }}>
-          <div className="p-6 rounded-full mb-8 mx-auto w-fit" style={{ background: `${theme.colors.primary}20` }}>
-            <Upload className="w-16 h-16" style={{ color: theme.colors.primary }} />
-          </div>
-          <h2 className="text-3xl font-bold mb-4" style={{ color: theme.text.primary }}>
-            Upload Telemetry Data
-          </h2>
-          <p className="text-lg mb-8" style={{ color: theme.text.secondary }}>
-            Import your CSV file to begin comprehensive fleet analysis
-          </p>
-          {errorMessage && (
-            <div className="p-4 mb-6 rounded-xl backdrop-blur-lg" style={{ 
-              background: `${theme.colors.danger}20`, 
-              color: theme.colors.danger,
-              border: `1px solid ${theme.colors.danger}40`
-            }}>
-              {errorMessage}
-            </div>
-          )}
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".csv"
-            onChange={handleFileUpload}
-            style={{ display: 'none' }}
-          />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="px-8 py-4 rounded-xl font-semibold text-white transition-all duration-300 hover:scale-105"
-            style={{ 
-              background: theme.gradients.primary,
-              boxShadow: theme.shadows.md
-            }}
-          >
-            Choose CSV File
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  const MetricCard = ({ title, value, unit, trend, subtitle, icon: Icon, gradient, size = 'normal' }) => (
-    <div className={`rounded-xl backdrop-blur-lg transition-all duration-300 hover:scale-[1.02] ${
-      size === 'large' ? 'p-6' : 'p-4'
-    }`} style={{ 
-      background: theme.card,
-      border: `1px solid ${theme.border}`,
-      boxShadow: theme.shadows.md
-    }}>
-      <div className="flex items-start justify-between mb-4">
-        <div className="flex-1">
-          <div className={`font-semibold uppercase tracking-wider mb-1 ${
-            size === 'large' ? 'text-sm' : 'text-xs'
-          }`} style={{ color: theme.text.muted }}>
-            {title}
-          </div>
-          {subtitle && (
-            <div className="text-xs opacity-75" style={{ color: theme.text.muted }}>
-              {subtitle}
-            </div>
-          )}
-        </div>
-        {Icon && (
-          <div className="p-3 rounded-xl transition-all duration-300 hover:scale-110" style={{ 
-            background: gradient || `${theme.colors.primary}20`
-          }}>
-            <Icon className="w-6 h-6 text-white" />
-          </div>
-        )}
-      </div>
-      <div className="flex items-baseline gap-2 mb-3">
-        <span className={`font-bold ${
-          size === 'large' ? 'text-4xl' : 'text-2xl'
-        }`} style={{ color: theme.text.primary }}>{value}</span>
-        {unit && <span className="text-lg font-medium" style={{ color: theme.text.secondary }}>{unit}</span>}
-      </div>
-      {trend !== undefined && (
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 px-3 py-1 rounded-full" style={{
-            background: trend > 0 ? `${theme.colors.success}20` : `${theme.colors.danger}20`
-          }}>
-            {trend > 0 ? 
-              <TrendingUp className="w-4 h-4" style={{ color: theme.colors.success }} /> : 
-              <TrendingDown className="w-4 h-4" style={{ color: theme.colors.danger }} />
-            }
-            <span className="text-sm font-semibold" style={{ 
-              color: trend > 0 ? theme.colors.success : theme.colors.danger 
-            }}>
-              {Math.abs(trend)}%
-            </span>
-          </div>
-          <span className="text-sm" style={{ color: theme.text.muted }}>vs last period</span>
-        </div>
-      )}
-    </div>
-  );
-
-  const CustomTooltip = ({ active, payload, label }) => {
-    if (active && payload && payload.length) {
-      return (
-        <div className="p-4 rounded-xl backdrop-blur-lg max-w-xs" style={{ 
-          background: theme.card,
-          border: `1px solid ${theme.border}`,
-          boxShadow: theme.shadows.lg
-        }}>
-          <p className="text-sm font-semibold mb-3" style={{ color: theme.text.primary }}>{label}</p>
-          {payload.map((entry, index) => (
-            <div key={index} className="flex items-center gap-3 text-sm mb-1">
-              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: entry.color }}></div>
-              <span style={{ color: theme.text.secondary }}>{entry.name}:</span>
-              <span className="font-semibold ml-auto" style={{ color: theme.text.primary }}>{entry.value}</span>
-            </div>
-          ))}
-        </div>
-      );
-    }
-    return null;
-  };
-
-  return (
-    <div className="h-screen flex flex-col overflow-hidden" style={{ background: theme.bg }}>
-      {/* Enhanced Header */}
-      <div className="flex items-center justify-between px-6 py-4 backdrop-blur-lg flex-shrink-0" style={{ 
-        background: theme.glass,
-        borderBottom: `1px solid ${theme.border}`,
-        boxShadow: theme.shadows.sm
-      }}>
-        <div className="flex items-center gap-6">
-          <div className="flex items-center gap-4">
-            <div className="p-3 rounded-xl" style={{ background: theme.gradients.primary }}>
-              <Activity className="w-7 h-7 text-white" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold" style={{ color: theme.text.primary }}>
-                Industrial Telemetry Dashboard
-              </h1>
-              <p className="text-sm" style={{ color: theme.text.muted }}>
-                Comprehensive fleet monitoring & predictive analytics
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 px-4 py-2 rounded-full backdrop-blur-lg" style={{
-              background: `${theme.colors.primary}20`,
-              border: `1px solid ${theme.colors.primary}40`
-            }}>
-              <Database className="w-4 h-4" style={{ color: theme.colors.primary }} />
-              <span className="text-sm font-semibold" style={{ color: theme.colors.primary }}>
-                {data.length} records
-              </span>
-            </div>
-            <div className="flex items-center gap-2 px-4 py-2 rounded-full backdrop-blur-lg" style={{
-              background: `${theme.colors.success}20`,
-              border: `1px solid ${theme.colors.success}40`
-            }}>
-              <Wifi className="w-4 h-4" style={{ color: theme.colors.success }} />
-              <span className="text-sm font-semibold" style={{ color: theme.colors.success }}>
-                {fleetMetrics.uniqueDevices} devices online
-              </span>
-            </div>
-          </div>
-        </div>
+    Object.values(processedData).flat().forEach(d => {
+      if (d.measure === 'cycle.durationS') {
+        const date = new Date(d.time);
+        const day = date.getDay();
+        const hour = date.getHours();
+        const key = `${day}-${hour}`;
         
-        <div className="flex items-center gap-4">
-          <input ref={fileInputRef} type="file" accept=".csv" onChange={handleFileUpload} style={{ display: 'none' }} />
-          <button 
-            onClick={() => fileInputRef.current?.click()} 
-            className="px-6 py-3 rounded-xl flex items-center gap-3 font-semibold text-white transition-all duration-300 hover:scale-105" 
-            style={{ 
-              background: theme.gradients.primary,
-              boxShadow: theme.shadows.md
-            }}
-          >
-            <Upload className="w-5 h-5" />
-            Upload Data
-          </button>
-          
-          <select 
-            value={selectedTimeRange} 
-            onChange={(e) => setSelectedTimeRange(e.target.value)} 
-            className="px-4 py-3 rounded-xl font-medium transition-all duration-300 backdrop-blur-lg" 
-            style={{ 
-              background: theme.card,
-              color: theme.text.primary, 
-              border: `1px solid ${theme.border}`,
-              boxShadow: theme.shadows.sm
-            }}
-          >
-            <option value="24h">Last 24 Hours</option>
-            <option value="7d">Last 7 Days</option>
-            <option value="30d">Last 30 Days</option>
-            <option value="all">All Time</option>
-          </select>
-          
-          <select 
-            value={selectedDevice} 
-            onChange={(e) => setSelectedDevice(e.target.value)} 
-            className="px-4 py-3 rounded-xl font-medium transition-all duration-300 backdrop-blur-lg" 
-            style={{ 
-              background: theme.card,
-              color: theme.text.primary, 
-              border: `1px solid ${theme.border}`,
-              boxShadow: theme.shadows.sm
-            }}
-          >
-            <option value="all">All Devices</option>
-            {uniqueDevices.map(device => (
-              <option key={device} value={device}>{device}</option>
-            ))}
-          </select>
-          
-          <button 
-            onClick={loadData} 
-            className="p-3 rounded-xl transition-all duration-300 hover:scale-105 backdrop-blur-lg" 
-            style={{ 
-              background: theme.card,
-              color: theme.text.secondary,
-              border: `1px solid ${theme.border}`,
-              boxShadow: theme.shadows.sm
-            }}
-          >
-            <RefreshCw className="w-5 h-5" />
-          </button>
-        </div>
+        if (!heatmap[key]) heatmap[key] = 0;
+        heatmap[key]++;
+      }
+    });
+    
+    return heatmap;
+  }
+};
+
+// ============= COMPONENTS =============
+const GaugeChart = ({ value, label }) => {
+  const percentage = (value / 100) * 100;
+  
+  return (
+    <div className="text-center">
+      <div className="relative w-32 h-20 mx-auto">
+        <svg width="120" height="80" viewBox="0 0 120 80">
+          <path d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="#e0e0e0" strokeWidth="12" />
+          <path d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="#4caf50" strokeWidth="12" strokeDasharray={`${(percentage / 100) * 157} 157`} />
+          <text x="60" y="50" textAnchor="middle" fontSize="20" fontWeight="bold" fill="#333">
+            {Math.round(value)}%
+          </text>
+        </svg>
       </div>
-
-      {/* Main Dashboard Grid */}
-      <div className="flex-1 p-6 overflow-auto">
-        <div className="grid grid-cols-12 gap-6 h-full">
-          
-          {/* Section 1: Fleet Overview KPIs */}
-          <div className="col-span-12 mb-4">
-            <h2 className="text-xl font-bold mb-4 flex items-center gap-3" style={{ color: theme.text.primary }}>
-              <Target className="w-6 h-6" style={{ color: theme.colors.primary }} />
-              Fleet Overview
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8 gap-4">
-              <MetricCard 
-                title="Total Runtime" 
-                subtitle="Sum(cycle_duration_ms)÷3600" 
-                value={fleetMetrics.totalRuntime} 
-                unit="hrs" 
-                trend={5.2} 
-                icon={Clock}
-                gradient={theme.gradients.primary}
-              />
-              <MetricCard 
-                title="Utilization Rate" 
-                subtitle="Runtime÷(Window×Machines)" 
-                value={fleetMetrics.utilizationRate} 
-                unit="%" 
-                trend={-2.1} 
-                icon={Gauge}
-                gradient={theme.gradients.success}
-              />
-              <MetricCard 
-                title="Total Cycles" 
-                subtitle="Count of completed cycles" 
-                value={fleetMetrics.totalCycles} 
-                trend={8.3} 
-                icon={Activity}
-                gradient={theme.gradients.teal}
-              />
-              <MetricCard 
-                title="Error Incidents" 
-                subtitle="E-stops + Overloads" 
-                value={fleetMetrics.errorCount} 
-                trend={-12.5} 
-                icon={AlertTriangle}
-                gradient={theme.gradients.danger}
-              />
-              <MetricCard 
-                title="Avg Cycles/Machine" 
-                subtitle="Workload balance indicator" 
-                value={fleetMetrics.avgCyclesPerMachine}
-                icon={BarChart3}
-                gradient={theme.gradients.warning}
-              />
-              <MetricCard 
-                title="Total Energy" 
-                subtitle="Sum(energy_active_kwh)" 
-                value={fleetMetrics.totalEnergy}
-                unit="kWh"
-                icon={Zap}
-                gradient={theme.gradients.purple}
-              />
-              <MetricCard 
-                title="Bales Produced" 
-                subtitle="Sum(bale_count_increment)" 
-                value={fleetMetrics.totalBales}
-                icon={Box}
-                gradient={theme.gradients.teal}
-              />
-              <MetricCard 
-                title="Active Devices" 
-                subtitle="Devices reporting data" 
-                value={fleetMetrics.uniqueDevices}
-                icon={Wifi}
-                gradient={theme.gradients.success}
-              />
-            </div>
-          </div>
-
-          {/* Section 2: Performance Analytics */}
-          <div className="col-span-8">
-            <h2 className="text-xl font-bold mb-4 flex items-center gap-3" style={{ color: theme.text.primary }}>
-              <BarChart3 className="w-6 h-6" style={{ color: theme.colors.success }} />
-              Performance Analytics
-            </h2>
-            
-            {/* Performance Trends Chart - Split into two charts for better visibility */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-              {/* Cycles and Runtime Chart */}
-              <div className="rounded-xl p-6 backdrop-blur-lg" style={{ 
-                background: theme.card,
-                border: `1px solid ${theme.border}`,
-                boxShadow: theme.shadows.md,
-                height: '400px'
-              }}>
-                <div className="mb-4">
-                  <h3 className="text-lg font-bold mb-2" style={{ color: theme.text.primary }}>
-                    Daily Cycles & Runtime
-                  </h3>
-                  <p className="text-sm" style={{ color: theme.text.muted }}>
-                    Daily cycle counts (bars) and total runtime hours (line) - both metrics use similar scales
-                  </p>
-                </div>
-                <ResponsiveContainer width="100%" height="80%">
-                  <ComposedChart data={usageMetrics.performanceTrends} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-                    <defs>
-                      <linearGradient id="cyclesGradient" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor={theme.colors.primary} stopOpacity={0.8} />
-                        <stop offset="100%" stopColor={theme.colors.primary} stopOpacity={0.3} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
-                    <XAxis 
-                      dataKey="date" 
-                      stroke={theme.text.muted} 
-                      tick={{ fontSize: 12 }}
-                      label={{ value: 'Date', position: 'insideBottom', offset: -10, style: { textAnchor: 'middle', fill: theme.text.muted } }}
-                    />
-                    <YAxis 
-                      yAxisId="left" 
-                      stroke={theme.text.muted} 
-                      tick={{ fontSize: 12 }}
-                      label={{ value: 'Cycle Count', angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: theme.text.muted } }}
-                    />
-                    <YAxis 
-                      yAxisId="right" 
-                      orientation="right" 
-                      stroke={theme.text.muted} 
-                      tick={{ fontSize: 12 }}
-                      label={{ value: 'Runtime Hours', angle: 90, position: 'insideRight', style: { textAnchor: 'middle', fill: theme.text.muted } }}
-                    />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Legend 
-                      wrapperStyle={{ color: theme.text.secondary, fontSize: '12px', paddingTop: '15px' }}
-                      iconType="line"
-                    />
-                    <Bar yAxisId="left" dataKey="cycles" fill="url(#cyclesGradient)" radius={[4, 4, 0, 0]} name="Daily Cycles" />
-                    <Line yAxisId="right" type="monotone" dataKey="runtime" stroke={theme.colors.success} strokeWidth={3} dot={{ r: 5, fill: theme.colors.success }} name="Runtime (hrs)" />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
-
-              {/* Energy Consumption Chart */}
-              <div className="rounded-xl p-6 backdrop-blur-lg" style={{ 
-                background: theme.card,
-                border: `1px solid ${theme.border}`,
-                boxShadow: theme.shadows.md,
-                height: '400px'
-              }}>
-                <div className="mb-4">
-                  <h3 className="text-lg font-bold mb-2" style={{ color: theme.text.primary }}>
-                    Energy Consumption & Efficiency
-                  </h3>
-                  <p className="text-sm" style={{ color: theme.text.muted }}>
-                    Daily energy consumption (kWh) and bales produced showing operational efficiency
-                  </p>
-                </div>
-                <ResponsiveContainer width="100%" height="80%">
-                  <ComposedChart data={usageMetrics.performanceTrends} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-                    <defs>
-                      <linearGradient id="energyGradient" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor={theme.colors.warning} stopOpacity={0.8} />
-                        <stop offset="100%" stopColor={theme.colors.warning} stopOpacity={0.3} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
-                    <XAxis 
-                      dataKey="date" 
-                      stroke={theme.text.muted} 
-                      tick={{ fontSize: 12 }}
-                      label={{ value: 'Date', position: 'insideBottom', offset: -10, style: { textAnchor: 'middle', fill: theme.text.muted } }}
-                    />
-                    <YAxis 
-                      yAxisId="left" 
-                      stroke={theme.text.muted} 
-                      tick={{ fontSize: 12 }}
-                      label={{ value: 'Energy (kWh)', angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: theme.text.muted } }}
-                    />
-                    <YAxis 
-                      yAxisId="right" 
-                      orientation="right" 
-                      stroke={theme.text.muted} 
-                      tick={{ fontSize: 12 }}
-                      label={{ value: 'Bales Produced', angle: 90, position: 'insideRight', style: { textAnchor: 'middle', fill: theme.text.muted } }}
-                    />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Legend 
-                      wrapperStyle={{ color: theme.text.secondary, fontSize: '12px', paddingTop: '15px' }}
-                      iconType="line"
-                    />
-                    <Area yAxisId="left" dataKey="energy" fill="url(#energyGradient)" stroke={theme.colors.warning} strokeWidth={2} name="Energy (kWh)" />
-                    <Line yAxisId="right" type="monotone" dataKey="bales" stroke={theme.colors.teal} strokeWidth={3} dot={{ r: 5, fill: theme.colors.teal }} name="Bales Produced" />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            {/* Machine Health Trends */}
-            <div className="rounded-xl p-6 backdrop-blur-lg" style={{ 
-              background: theme.card,
-              border: `1px solid ${theme.border}`,
-              boxShadow: theme.shadows.md,
-              height: '400px'
-            }}>
-              <div className="mb-4">
-                <h3 className="text-lg font-bold mb-2" style={{ color: theme.text.primary }}>
-                  Machine Health Trends
-                </h3>
-                <p className="text-sm" style={{ color: theme.text.muted }}>
-                  Key health indicators showing electrical imbalance, hydraulic pressure stability, and cycle time performance over time
-                </p>
-              </div>
-              <ResponsiveContainer width="100%" height="85%">
-                <LineChart data={healthMetrics.trendData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
-                  <XAxis 
-                    dataKey="date" 
-                    stroke={theme.text.muted} 
-                    tick={{ fontSize: 12 }}
-                    label={{ value: 'Date', position: 'insideBottom', offset: -10, style: { textAnchor: 'middle', fill: theme.text.muted } }}
-                  />
-                  <YAxis 
-                    stroke={theme.text.muted} 
-                    tick={{ fontSize: 12 }}
-                    label={{ value: 'Health Metrics (%)', angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: theme.text.muted } }}
-                  />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Legend 
-                    wrapperStyle={{ color: theme.text.secondary, fontSize: '12px', paddingTop: '20px' }}
-                    iconType="line"
-                  />
-                  <Line type="monotone" dataKey="currentImbalance" stroke={theme.colors.danger} strokeWidth={3} dot={{ r: 5 }} name="Current Imbalance %" />
-                  <Line type="monotone" dataKey="pressureOvershoot" stroke={theme.colors.warning} strokeWidth={3} dot={{ r: 5 }} name="Pressure Overshoot %" />
-                  <Line type="monotone" dataKey="cycleTimeDrift" stroke={theme.colors.purple} strokeWidth={3} dot={{ r: 5 }} name="Cycle Time Drift %" />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          {/* Section 3: Machine Rankings & Status */}
-          <div className="col-span-4">
-            <h2 className="text-xl font-bold mb-4 flex items-center gap-3" style={{ color: theme.text.primary }}>
-              <Users className="w-6 h-6" style={{ color: theme.colors.teal }} />
-              Machine Rankings
-            </h2>
-
-            {/* Top Performers */}
-            <div className="rounded-xl p-6 mb-4 backdrop-blur-lg" style={{ 
-              background: theme.card,
-              border: `1px solid ${theme.border}`,
-              boxShadow: theme.shadows.md
-            }}>
-              <div className="flex items-center gap-3 mb-4">
-                <div className="p-2 rounded-lg" style={{ background: `${theme.colors.success}20` }}>
-                  <ChevronUp className="w-5 h-5" style={{ color: theme.colors.success }} />
-                </div>
-                <span className="text-lg font-bold" style={{ color: theme.text.primary }}>Top Performers</span>
-              </div>
-              <div className="space-y-3">
-                {machineRankings.top5.map((machine, idx) => (
-                  <div key={machine.device} className="flex items-center justify-between p-4 rounded-lg transition-all duration-300 hover:scale-[1.02]" 
-                    style={{ background: theme.glass }}>
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold" style={{ 
-                        background: theme.gradients.success,
-                        color: 'white'
-                      }}>
-                        {idx + 1}
-                      </div>
-                      <div>
-                        <div className="text-sm font-semibold" style={{ color: theme.text.primary }}>
-                          {machine.device.slice(-10)}
-                        </div>
-                        <div className="text-xs" style={{ color: theme.text.muted }}>
-                          {machine.cycles} cycles
-                        </div>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-sm font-bold" style={{ color: theme.colors.success }}>
-                        {machine.runtime}h
-                      </div>
-                      <div className="text-xs" style={{ color: theme.text.muted }}>
-                        {machine.utilization}% util
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Attention Needed */}
-            <div className="rounded-xl p-6 backdrop-blur-lg" style={{ 
-              background: theme.card,
-              border: `1px solid ${theme.border}`,
-              boxShadow: theme.shadows.md
-            }}>
-              <div className="flex items-center gap-3 mb-4">
-                <div className="p-2 rounded-lg" style={{ background: `${theme.colors.warning}20` }}>
-                  <ChevronDown className="w-5 h-5" style={{ color: theme.colors.warning }} />
-                </div>
-                <span className="text-lg font-bold" style={{ color: theme.text.primary }}>Attention Needed</span>
-              </div>
-              <div className="space-y-3">
-                {machineRankings.bottom5.map((machine, idx) => (
-                  <div key={machine.device} className="flex items-center justify-between p-4 rounded-lg transition-all duration-300 hover:scale-[1.02]" 
-                    style={{ background: theme.glass }}>
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold" style={{ 
-                        background: theme.gradients.warning,
-                        color: 'white'
-                      }}>
-                        {idx + 1}
-                      </div>
-                      <div>
-                        <div className="text-sm font-semibold" style={{ color: theme.text.primary }}>
-                          {machine.device.slice(-10)}
-                        </div>
-                        <div className="text-xs" style={{ color: theme.text.muted }}>
-                          {machine.errors} errors
-                        </div>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-sm font-bold" style={{ color: theme.colors.warning }}>
-                        {machine.runtime}h
-                      </div>
-                      <div className="text-xs" style={{ color: theme.text.muted }}>
-                        {machine.utilization}% util
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Section 4: Safety & Health Monitoring */}
-          <div className="col-span-12 mt-6">
-            <h2 className="text-xl font-bold mb-4 flex items-center gap-3" style={{ color: theme.text.primary }}>
-              <Shield className="w-6 h-6" style={{ color: theme.colors.danger }} />
-              Safety & Health Monitoring
-            </h2>
-            <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-              
-              {/* Safety Metrics */}
-              <div className="rounded-xl p-6 backdrop-blur-lg" style={{ 
-                background: theme.card,
-                border: `1px solid ${theme.border}`,
-                boxShadow: theme.shadows.md
-              }}>
-                <h3 className="text-lg font-bold mb-4" style={{ color: theme.text.primary }}>Safety Dashboard</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="p-4 rounded-xl text-center" style={{ background: `${theme.colors.danger}15` }}>
-                    <div className="text-xs font-semibold mb-2" style={{ color: theme.colors.danger }}>E-STOP ACTIVATIONS</div>
-                    <div className="text-3xl font-bold" style={{ color: theme.colors.danger }}>{safetyMetrics.eStopCount}</div>
-                  </div>
-                  <div className="p-4 rounded-xl text-center" style={{ background: `${theme.colors.orange}15` }}>
-                    <div className="text-xs font-semibold mb-2" style={{ color: theme.colors.orange }}>OVERLOAD TRIPS</div>
-                    <div className="text-3xl font-bold" style={{ color: theme.colors.orange }}>{safetyMetrics.overloadCount}</div>
-                  </div>
-                  <div className="p-4 rounded-xl text-center" style={{ background: `${theme.colors.warning}15` }}>
-                    <div className="text-xs font-semibold mb-2" style={{ color: theme.colors.warning }}>DOOR/GATE VIOLATIONS</div>
-                    <div className="text-3xl font-bold" style={{ color: theme.colors.warning }}>{safetyMetrics.doorGateViolations}</div>
-                  </div>
-                  <div className="p-4 rounded-xl text-center" style={{ background: `${theme.colors.purple}15` }}>
-                    <div className="text-xs font-semibold mb-2" style={{ color: theme.colors.purple }}>VALVE ISSUES</div>
-                    <div className="text-3xl font-bold" style={{ color: theme.colors.purple }}>{safetyMetrics.valveIssues}</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Error Trends Chart */}
-              <div className="rounded-xl p-6 backdrop-blur-lg" style={{ 
-                background: theme.card,
-                border: `1px solid ${theme.border}`,
-                boxShadow: theme.shadows.md
-              }}>
-                <div className="mb-4">
-                  <h3 className="text-lg font-bold mb-2" style={{ color: theme.text.primary }}>Error Trends Over Time</h3>
-                  <p className="text-sm" style={{ color: theme.text.muted }}>
-                    Daily safety incident tracking: E-stops, overloads, door/gate violations, and valve failures
-                  </p>
-                </div>
-                <div style={{ height: '250px' }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={safetyMetrics.errorTrendData} margin={{ top: 5, right: 30, left: 20, bottom: 40 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
-                      <XAxis 
-                        dataKey="date" 
-                        stroke={theme.text.muted} 
-                        tick={{ fontSize: 10 }}
-                        label={{ value: 'Date', position: 'insideBottom', offset: -5, style: { textAnchor: 'middle', fill: theme.text.muted, fontSize: '10px' } }}
-                      />
-                      <YAxis 
-                        stroke={theme.text.muted} 
-                        tick={{ fontSize: 10 }}
-                        label={{ value: 'Error Count', angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: theme.text.muted, fontSize: '10px' } }}
-                      />
-                      <Tooltip content={<CustomTooltip />} />
-                      <Legend 
-                        wrapperStyle={{ color: theme.text.secondary, fontSize: '11px', paddingTop: '10px' }}
-                        iconType="line"
-                      />
-                      <Line type="monotone" dataKey="eStops" stroke={theme.colors.danger} strokeWidth={2} dot={{ r: 3 }} name="E-Stops" />
-                      <Line type="monotone" dataKey="overloads" stroke={theme.colors.orange} strokeWidth={2} dot={{ r: 3 }} name="Overloads" />
-                      <Line type="monotone" dataKey="doorGate" stroke={theme.colors.warning} strokeWidth={2} dot={{ r: 3 }} name="Door/Gate" />
-                      <Line type="monotone" dataKey="valveIssues" stroke={theme.colors.purple} strokeWidth={2} dot={{ r: 3 }} name="Valve Issues" />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              {/* Health Metrics */}
-              <div className="rounded-xl p-6 backdrop-blur-lg" style={{ 
-                background: theme.card,
-                border: `1px solid ${theme.border}`,
-                boxShadow: theme.shadows.md
-              }}>
-                <h3 className="text-lg font-bold mb-4" style={{ color: theme.text.primary }}>Health Metrics</h3>
-                <div className="space-y-4">
-                  <div className="flex justify-between items-center p-3 rounded-lg" style={{ background: theme.glass }}>
-                    <span className="text-sm font-medium" style={{ color: theme.text.secondary }}>Current Imbalance</span>
-                    <span className="text-lg font-bold" style={{ color: theme.text.primary }}>{healthMetrics.avgCurrentImbalance}%</span>
-                  </div>
-                  <div className="flex justify-between items-center p-3 rounded-lg" style={{ background: theme.glass }}>
-                    <span className="text-sm font-medium" style={{ color: theme.text.secondary }}>Pressure Overshoot</span>
-                    <span className="text-lg font-bold" style={{ color: theme.text.primary }}>{healthMetrics.avgPressureOvershoot}%</span>
-                  </div>
-                  <div className="flex justify-between items-center p-3 rounded-lg" style={{ background: theme.glass }}>
-                    <span className="text-sm font-medium" style={{ color: theme.text.secondary }}>Cycle Time Drift</span>
-                    <span className="text-lg font-bold" style={{ color: theme.text.primary }}>{healthMetrics.cycleTimeDrift}%</span>
-                  </div>
-                  <div className="flex justify-between items-center p-3 rounded-lg" style={{ background: theme.glass }}>
-                    <span className="text-sm font-medium" style={{ color: theme.text.secondary }}>Energy per Cycle</span>
-                    <span className="text-lg font-bold" style={{ color: theme.text.primary }}>{healthMetrics.avgEnergyPerCycle} kWh</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Anomaly Detection with Trends */}
-              <div className="rounded-xl p-6 backdrop-blur-lg" style={{ 
-                background: theme.card,
-                border: `1px solid ${theme.border}`,
-                boxShadow: theme.shadows.md
-              }}>
-                <h3 className="text-lg font-bold mb-4" style={{ color: theme.text.primary }}>Anomaly Analysis</h3>
-                <div className="grid grid-cols-2 gap-3 mb-4">
-                  <div className="text-center p-3 rounded-xl" style={{ background: theme.glass }}>
-                    <div className="text-2xl font-bold" style={{ color: theme.colors.danger }}>{anomalyMetrics.avgAnomalyScore}%</div>
-                    <div className="text-xs font-semibold" style={{ color: theme.text.secondary }}>AVG SCORE</div>
-                  </div>
-                  <div className="text-center p-3 rounded-xl" style={{ background: theme.glass }}>
-                    <div className="text-2xl font-bold" style={{ color: theme.colors.orange }}>{anomalyMetrics.anomalyCount}</div>
-                    <div className="text-xs font-semibold" style={{ color: theme.text.secondary }}>DETECTED</div>
-                  </div>
-                </div>
-                
-                {/* Mini Anomaly Trend Chart */}
-                <div style={{ height: '120px' }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={anomalyMetrics.anomalyTrendData} margin={{ top: 5, right: 5, left: 5, bottom: 25 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
-                      <XAxis 
-                        dataKey="date" 
-                        stroke={theme.text.muted} 
-                        tick={{ fontSize: 9 }}
-                        label={{ value: 'Date', position: 'insideBottom', offset: -5, style: { textAnchor: 'middle', fill: theme.text.muted, fontSize: '8px' } }}
-                      />
-                      <YAxis 
-                        stroke={theme.text.muted} 
-                        tick={{ fontSize: 9 }}
-                        label={{ value: 'Count', angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: theme.text.muted, fontSize: '8px' } }}
-                      />
-                      <Tooltip content={<CustomTooltip />} />
-                      <Line type="monotone" dataKey="anomalies" stroke={theme.colors.danger} strokeWidth={2} dot={{ r: 2 }} name="Anomaly Count" />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-                
-                {anomalyMetrics.highAnomalyMachines?.length > 0 && (
-                  <div className="mt-4">
-                    <div className="text-xs font-semibold mb-2" style={{ color: theme.colors.danger }}>⚠️ High Risk Machines</div>
-                    <div className="space-y-1">
-                      {anomalyMetrics.highAnomalyMachines.slice(0, 2).map(machine => (
-                        <div key={machine.device} className="flex justify-between text-xs p-2 rounded-lg" style={{ 
-                          background: `${theme.colors.danger}20`,
-                          border: `1px solid ${theme.colors.danger}40`
-                        }}>
-                          <span style={{ color: theme.text.primary }}>{machine.device.slice(-8)}</span>
-                          <span style={{ color: theme.colors.danger }}>{machine.anomalyCount}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Section 5: Operational Analysis */}
-          <div className="col-span-12 mt-6">
-            <h2 className="text-xl font-bold mb-4 flex items-center gap-3" style={{ color: theme.text.primary }}>
-              <Cpu className="w-6 h-6" style={{ color: theme.colors.purple }} />
-              Operational Analysis
-            </h2>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              
-              {/* Utilization Heatmap */}
-              <div className="rounded-xl p-6 backdrop-blur-lg" style={{ 
-                background: theme.card,
-                border: `1px solid ${theme.border}`,
-                boxShadow: theme.shadows.md
-              }}>
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-bold" style={{ color: theme.text.primary }}>
-                    Utilization Heatmap (Hour × Day)
-                  </h3>
-                  <div className="flex items-center gap-2 text-xs" style={{ color: theme.text.muted }}>
-                    <span>Low</span>
-                    <div className="flex gap-1">
-                      <div className="w-3 h-3 rounded-sm" style={{ background: theme.colors.primary, opacity: 0.3 }}></div>
-                      <div className="w-3 h-3 rounded-sm" style={{ background: theme.colors.primary, opacity: 0.6 }}></div>
-                      <div className="w-3 h-3 rounded-sm" style={{ background: theme.colors.primary, opacity: 1.0 }}></div>
-                    </div>
-                    <span>High</span>
-                  </div>
-                </div>
-                <div style={{ height: '300px' }}>
-                  <div className="grid gap-1 h-full" style={{ 
-                    gridTemplateColumns: 'auto repeat(24, 1fr)',
-                    gridTemplateRows: 'auto repeat(7, 1fr)',
-                    fontSize: '10px'
-                  }}>
-                    {/* Header */}
-                    <div></div>
-                    {heatmapData.hours.map(h => (
-                      <div key={h} className="text-center font-medium flex items-center justify-center" style={{ color: theme.text.muted }}>
-                        {h % 4 === 0 ? h : ''}
-                      </div>
-                    ))}
-                    {/* Data */}
-                    {heatmapData.days.map((day, dayIdx) => (
-                      <React.Fragment key={dayIdx}>
-                        <div className="font-semibold flex items-center justify-center" style={{ color: theme.text.muted }}>{day}</div>
-                        {heatmapData.hours.map(hour => {
-                          const cell = heatmapData.data.find(d => d.day === dayIdx && d.hour === hour);
-                          const intensity = cell ? cell.intensity : 0;
-                          const opacity = intensity / 100;
-                          return (
-                            <div key={`${dayIdx}-${hour}`} 
-                              className="rounded transition-all duration-300 hover:scale-110 cursor-pointer" 
-                              style={{
-                                background: `linear-gradient(135deg, ${theme.colors.primary}, ${theme.colors.teal})`,
-                                opacity: opacity > 0 ? (0.3 + opacity * 0.7) : 0.1
-                              }}
-                              title={`${day} ${hour}:00 - ${cell?.value.toFixed(1) || 0} hrs`}
-                            />
-                          );
-                        })}
-                      </React.Fragment>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* Idle vs Active Time */}
-              <div className="rounded-xl p-6 backdrop-blur-lg" style={{ 
-                background: theme.card,
-                border: `1px solid ${theme.border}`,
-                boxShadow: theme.shadows.md
-              }}>
-                <h3 className="text-lg font-bold mb-4" style={{ color: theme.text.primary }}>
-                  Machine Utilization Analysis
-                </h3>
-                <div style={{ height: '300px' }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={usageMetrics.idleActiveData.slice(0, 6)} layout="horizontal" margin={{ top: 5, right: 30, left: 60, bottom: 5 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
-                      <XAxis type="number" stroke={theme.text.muted} tick={{ fontSize: 11 }} />
-                      <YAxis type="category" dataKey="device" stroke={theme.text.muted} tick={{ fontSize: 10 }} width={55} />
-                      <Tooltip content={<CustomTooltip />} />
-                      <Legend 
-                        wrapperStyle={{ color: theme.text.secondary, fontSize: '12px', paddingTop: '15px' }}
-                        iconType="rect"
-                      />
-                      <Bar dataKey="activeTime" stackId="a" fill={theme.colors.success} name="Active Time (hrs)" radius={[0, 4, 4, 0]} />
-                      <Bar dataKey="idleTime" stackId="a" fill={theme.colors.danger} name="Idle Time (hrs)" radius={[4, 0, 0, 4]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Section 6: Maintenance & EOL Planning */}
-          <div className="col-span-12 mt-6">
-            <h2 className="text-xl font-bold mb-4 flex items-center gap-3" style={{ color: theme.text.primary }}>
-              <Wrench className="w-6 h-6" style={{ color: theme.colors.warning }} />
-              Maintenance & EOL Planning
-            </h2>
-            <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-              
-              <MetricCard 
-                title="Mean Time Between Failures" 
-                subtitle="MTBF (hours)" 
-                value={eolMetrics.avgMTBF} 
-                unit="hrs"
-                icon={Timer}
-                gradient={theme.gradients.teal}
-                size="large"
-              />
-              
-              <MetricCard 
-                title="Mean Time To Repair" 
-                subtitle="MTTR (hours)" 
-                value={eolMetrics.avgMTTR} 
-                unit="hrs"
-                icon={Wrench}
-                gradient={theme.gradients.warning}
-                size="large"
-              />
-              
-              <MetricCard 
-                title="Average Remaining Life" 
-                subtitle="Fleet EOL estimate" 
-                value={eolMetrics.avgRemainingLife} 
-                unit="%"
-                icon={Battery}
-                gradient={theme.gradients.success}
-                size="large"
-              />
-              
-              <div className="rounded-xl p-6 backdrop-blur-lg" style={{ 
-                background: theme.card,
-                border: `1px solid ${theme.border}`,
-                boxShadow: theme.shadows.md
-              }}>
-                <h3 className="text-lg font-bold mb-4" style={{ color: theme.text.primary }}>EOL Alert Machines</h3>
-                {eolMetrics.eolMachines?.length > 0 ? (
-                  <div className="space-y-3">
-                    {eolMetrics.eolMachines.slice(0, 4).map(machine => (
-                      <div key={machine.device} className="flex justify-between text-sm p-3 rounded-lg" style={{ 
-                        background: `${theme.colors.warning}20`,
-                        border: `1px solid ${theme.colors.warning}40`
-                      }}>
-                        <span style={{ color: theme.text.primary }}>{machine.device.slice(-10)}</span>
-                        <span style={{ color: theme.colors.warning }}>{machine.remainingLife}% life</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-center py-8">
-                    <div className="text-sm" style={{ color: theme.colors.success }}>✓ All machines operating within normal parameters</div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
+      <div className="mt-2 text-sm text-gray-500">{label}</div>
+      <div className="flex justify-center gap-1 mt-1 text-xs">
+        <span className="text-gray-400">Low</span>
+        <span className="text-gray-600">High</span>
       </div>
     </div>
   );
 };
 
-export default Dashboard;
+const CylinderChart = ({ low, medium, high, label }) => {
+  const total = low + medium + high;
+  const lowPct = (low / total) * 100;
+  const mediumPct = (medium / total) * 100;
+  const highPct = (high / total) * 100;
+  
+  return (
+    <div className="text-center">
+      <div className="flex justify-center gap-2 mb-2 text-xs">
+        <span className="px-2 py-1 bg-red-500 text-white rounded">Low</span>
+        <span className="px-2 py-1 bg-yellow-400 text-white rounded">Med</span>
+        <span className="px-2 py-1 bg-green-500 text-white rounded">High</span>
+      </div>
+      <div className="text-sm font-semibold mb-2">{label}</div>
+      <svg width="80" height="120" viewBox="0 0 80 120" className="mx-auto">
+        <ellipse cx="40" cy="110" rx="30" ry="8" fill="#ddd" />
+        <rect x="10" y="20" width="60" height="90" fill="#f5f5f5" stroke="#999" strokeWidth="1" />
+        {lowPct > 0 && <rect x="10" y={110 - lowPct * 0.9} width="60" height={lowPct * 0.9} fill="#dc3545" />}
+        {mediumPct > 0 && <rect x="10" y={110 - lowPct * 0.9 - mediumPct * 0.9} width="60" height={mediumPct * 0.9} fill="#ffc107" />}
+        {highPct > 0 && <rect x="10" y={20} width="60" height={highPct * 0.9} fill="#28a745" />}
+        <ellipse cx="40" cy="20" rx="30" ry="8" fill="none" stroke="#999" strokeWidth="1" />
+        <text x="40" y="60" textAnchor="middle" fontSize="14" fontWeight="bold" fill="#333">{high}%</text>
+      </svg>
+    </div>
+  );
+};
+
+const HeatmapChart = ({ title, heatmapData }) => {
+  const hours = Array.from({ length: 24 }, (_, i) => i);
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  
+  const getColor = (day, hour) => {
+    const key = `${day}-${hour}`;
+    const value = heatmapData[key] || 0;
+    
+    if (value === 0) return '#f5f5f5';
+    if (value > 10) return '#28a745';
+    if (value > 5) return '#ffc107';
+    if (value > 2) return '#fd7e14';
+    return '#dc3545';
+  };
+  
+  return (
+    <div>
+      <h6 className="text-sm font-semibold text-gray-600 mb-3">{title}</h6>
+      <div className="flex items-center text-xs mb-2">
+        <span className="px-2 py-1 bg-green-500 text-white rounded mr-2">High (10+)</span>
+        <span className="px-2 py-1 bg-yellow-400 text-white rounded mr-2">Medium (5-10)</span>
+        <span className="px-2 py-1 bg-red-500 text-white rounded">Low (2-5)</span>
+      </div>
+      <div className="overflow-x-auto">
+        <svg width="600" height="200" viewBox="0 0 600 200">
+          {days.map((day, dayIdx) => (
+            <text key={day} x="30" y={dayIdx * 25 + 35} fontSize="10" textAnchor="end">{day}</text>
+          ))}
+          {hours.map((hour, hourIdx) => {
+            if (hourIdx % 2 === 0) {
+              return <text key={hour} x={hourIdx * 24 + 60} y="15" fontSize="9" textAnchor="middle">{hour.toString().padStart(2, '0')}</text>;
+            }
+            return null;
+          })}
+          {days.map((day, dayIdx) => 
+            hours.map((hour, hourIdx) => (
+              <rect
+                key={`${day}-${hour}`}
+                x={hourIdx * 24 + 48}
+                y={dayIdx * 25 + 20}
+                width="22"
+                height="22"
+                fill={getColor(dayIdx, hour)}
+                stroke="#fff"
+                strokeWidth="2"
+              />
+            ))
+          )}
+        </svg>
+      </div>
+    </div>
+  );
+};
+
+const FileUploader = ({ onFileLoad, isLoading }) => {
+  const handleFileUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      onFileLoad(event.target.result);
+    };
+    reader.readAsText(file);
+  };
+
+  return (
+    <div className="bg-blue-50 border-2 border-dashed border-blue-300 rounded-lg p-8 text-center mb-6">
+      <div className="mb-4">
+        <svg className="mx-auto h-12 w-12 text-blue-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+          <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </div>
+      <label htmlFor="file-upload" className="cursor-pointer">
+        <span className="mt-2 block text-sm font-medium text-gray-900">
+          {isLoading ? 'Loading data...' : 'Upload CSV File (test_data.csv)'}
+        </span>
+        <input
+          id="file-upload"
+          type="file"
+          accept=".csv"
+          onChange={handleFileUpload}
+          className="hidden"
+          disabled={isLoading}
+        />
+        <span className="mt-1 block text-xs text-gray-500">
+          Click to browse or drag and drop
+        </span>
+      </label>
+    </div>
+  );
+};
+
+// ============= MAIN DASHBOARD =============
+export default function Dashboard() {
+  const [csvData, setCsvData] = useState(null);
+  const [processedData, setProcessedData] = useState({});
+  const [isLoading, setIsLoading] = useState(false);
+  const [stats, setStats] = useState({
+    totalCycles: 0,
+    utilization: 0,
+    avgCycleCount: 0,
+    deviceId: 'N/A',
+    chamberFullness: { low: 30, medium: 40, high: 30 },
+    anomalyCount: 0,
+    eStops: 0,
+    cycleErrors: 0,
+    gateViolations: 0,
+    mtbf: 0,
+    mttr: 0
+  });
+
+  const handleFileLoad = (content) => {
+    setIsLoading(true);
+    try {
+      const parsed = DataUtils.parseCSV(content);
+      setCsvData(parsed);
+      
+      const byDay = DataUtils.processByDay(parsed);
+      setProcessedData(byDay);
+      
+      const totalCycles = Object.values(byDay).flat().filter(d => d.measure === 'cycle.durationS').length;
+      const utilization = DataUtils.calculateUtilization(byDay);
+      const days = Object.keys(byDay).length || 1;
+      const deviceId = parsed[0]?.deviceId || 'N/A';
+      const chamberFullness = DataUtils.calculateChamberFullness(byDay);
+      const anomalies = DataUtils.detectAnomalies(byDay);
+      const safetyMetrics = DataUtils.calculateSafetyMetrics(byDay);
+      const mtbf = DataUtils.calculateMTBF(byDay);
+      const mttr = DataUtils.calculateMTTR(byDay);
+      
+      setStats({
+        totalCycles,
+        utilization,
+        avgCycleCount: Math.round(totalCycles / days),
+        deviceId,
+        chamberFullness,
+        anomalyCount: anomalies.length,
+        ...safetyMetrics,
+        mtbf,
+        mttr
+      });
+      
+      setIsLoading(false);
+    } catch (error) {
+      console.error('Error processing CSV:', error);
+      setIsLoading(false);
+      alert('Error processing CSV file. Please check the file format.');
+    }
+  };
+
+  const cycleCountData = csvData ? DataUtils.getCycleCountByDay(processedData) : [];
+  const energyData = csvData ? DataUtils.getEnergyByDay(processedData) : [];
+  const voltageData = csvData ? DataUtils.getVoltageByDay(processedData) : [];
+  const currentData = csvData ? DataUtils.getCurrentByDay(processedData) : [];
+  const runtimeData = csvData ? DataUtils.getRuntimeByDay(processedData) : [];
+  const anomalyBreakdown = csvData ? DataUtils.getAnomalyBreakdown(processedData) : [];
+  const recentAnomalies = csvData ? DataUtils.detectAnomalies(processedData).slice(-5) : [];
+  const downtimeData = csvData ? DataUtils.calculateDowntime(processedData) : [];
+  const digitalInputEvents = csvData ? DataUtils.getDigitalInputTimeline(processedData) : [];
+  const heatmapData = csvData ? DataUtils.getUtilizationHeatmap(processedData) : {};
+
+  const sections = [
+    { id: 'performance', icon: '📊', label: 'Performance' },
+    { id: 'electrical', icon: '⚡', label: 'Electrical Health' },
+    { id: 'utilization', icon: '📈', label: 'Utilization' },
+    { id: 'energy', icon: '💡', label: 'Energy Management' },
+    { id: 'anomaly', icon: '⚠️', label: 'Anomaly Detection' },
+    { id: 'safety', icon: '🛡️', label: 'Safety & Reliability' },
+    { id: 'eol', icon: '📅', label: 'EOL Planning' }
+  ];
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <nav className="bg-white shadow-sm border-b border-gray-200">
+        <div className="px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center">
+            <div className="w-10 h-10 bg-red-600 rounded mr-3 flex items-center justify-center text-white font-bold text-xl">K</div>
+            <span className="text-2xl font-bold text-red-700">Komar</span>
+          </div>
+          <div className="flex items-center gap-4">
+            <span className="text-sm text-gray-500">Hey limanyel!</span>
+            <div className="w-10 h-10 bg-blue-500 rounded-full"></div>
+          </div>
+        </div>
+      </nav>
+
+      <div className="flex">
+        <div className="w-56 bg-white min-h-screen shadow-sm">
+          <nav className="py-4">
+            {sections.map(item => (
+              <div key={item.id} className="px-6 py-3 flex items-center gap-3 border-l-4 border-transparent">
+                <span className="text-xl">{item.icon}</span>
+                <span className="text-sm">{item.label}</span>
+              </div>
+            ))}
+          </nav>
+        </div>
+
+        <div className="flex-1 p-6">
+          {!csvData && <FileUploader onFileLoad={handleFileLoad} isLoading={isLoading} />}
+
+          {csvData && (
+            <>
+              <div className="bg-white rounded-lg shadow-sm p-4 mb-6">
+                <div className="grid grid-cols-4 gap-4">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Region/ Site</label>
+                    <select className="w-full border border-gray-300 rounded px-3 py-2 text-sm">
+                      <option>Select</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Device</label>
+                    <select className="w-full border border-gray-300 rounded px-3 py-2 text-sm">
+                      <option>{stats.deviceId}</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Time Period</label>
+                    <select className="w-full border border-gray-300 rounded px-3 py-2 text-sm">
+                      <option>Last 7 Days</option>
+                    </select>
+                  </div>
+                  <div className="flex items-end">
+                    <span className="text-xs text-gray-500">Data loaded: {Object.keys(processedData).length} days</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-lg shadow-sm mb-6">
+                <div className="border-l-4 border-yellow-400 px-6 py-4 bg-yellow-50">
+                  <h2 className="text-lg font-semibold flex items-center gap-2">📊 Performance</h2>
+                </div>
+                
+                <div className="p-6">
+                  <div className="grid grid-cols-3 gap-6 mb-6">
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">Utilization Rate</h6>
+                      <div className="flex items-center text-xs mb-3 justify-center gap-2">
+                        <span className="px-2 py-1 bg-red-500 text-white rounded">Low</span>
+                        <span className="px-2 py-1 bg-yellow-400 text-white rounded">Med</span>
+                        <span className="px-2 py-1 bg-green-500 text-white rounded">High</span>
+                      </div>
+                      <GaugeChart value={stats.utilization} label={stats.deviceId} />
+                    </div>
+
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">Chamber Fullness Estimate</h6>
+                      <CylinderChart 
+                        low={stats.chamberFullness.low} 
+                        medium={stats.chamberFullness.medium} 
+                        high={stats.chamberFullness.high} 
+                        label={stats.deviceId} 
+                      />
+                    </div>
+
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">Total Cycle Count</h6>
+                      <div className="text-center mb-3">
+                        <div className="text-5xl font-bold">{stats.totalCycles}</div>
+                      </div>
+                      <ResponsiveContainer width="100%" height={80}>
+                        <BarChart data={cycleCountData}>
+                          <Bar dataKey="count" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                      <div className="text-center mt-4">
+                        <h6 className="text-xs text-gray-500 mb-2">Avg Cycle Count / Day</h6>
+                        <div className="text-2xl font-bold">{stats.avgCycleCount}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-6 mb-6">
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">Total Runtime Vs Cycle Duration</h6>
+                      <ResponsiveContainer width="100%" height={250}>
+                        <ComposedChart data={runtimeData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="day" style={{ fontSize: '10px' }} />
+                          <YAxis yAxisId="left" style={{ fontSize: '10px' }} />
+                          <YAxis yAxisId="right" orientation="right" style={{ fontSize: '10px' }} />
+                          <Tooltip />
+                          <Legend />
+                          <Bar yAxisId="left" dataKey="runtime" fill="#fbbf24" name="Runtime (min)" />
+                          <Line yAxisId="right" type="monotone" dataKey="avgDuration" stroke="#6366f1" strokeWidth={2} name="Avg Cycle (s)" />
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">Cycle Count by Day</h6>
+                      <ResponsiveContainer width="100%" height={250}>
+                        <BarChart data={cycleCountData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="day" style={{ fontSize: '10px' }} />
+                          <YAxis style={{ fontSize: '10px' }} />
+                          <Tooltip />
+                          <Bar dataKey="count" fill="#ec4899" />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-6">
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">Cycle Performance</h6>
+                      <ResponsiveContainer width="100%" height={250}>
+                        <LineChart data={runtimeData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="day" style={{ fontSize: '10px' }} />
+                          <YAxis style={{ fontSize: '10px' }} />
+                          <Tooltip />
+                          <Line type="monotone" dataKey="cycles" stroke="#8b5cf6" strokeWidth={2} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">Down Periods (minutes)</h6>
+                      <ResponsiveContainer width="100%" height={250}>
+                        <BarChart data={downtimeData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="day" style={{ fontSize: '10px' }} />
+                          <YAxis style={{ fontSize: '10px' }} />
+                          <Tooltip />
+                          <Bar dataKey="downtime" fill="#fbbf24" />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-lg shadow-sm mb-6">
+                <div className="border-l-4 border-yellow-400 px-6 py-4 bg-yellow-50">
+                  <h2 className="text-lg font-semibold flex items-center gap-2">⚡ Electrical Health</h2>
+                </div>
+                <div className="p-6">
+                  <div className="grid grid-cols-2 gap-6">
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">Current Inrush</h6>
+                      <ResponsiveContainer width="100%" height={250}>
+                        <BarChart data={currentData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="day" style={{ fontSize: '10px' }} />
+                          <YAxis style={{ fontSize: '10px' }} />
+                          <Tooltip />
+                          <Legend />
+                          <Bar dataKey="inrushMax" fill="#ec4899" name="Peak Inrush (A)" />
+                          <Bar dataKey="inrushMean" fill="#8b5cf6" name="Mean Inrush (A)" />
+                          <Bar dataKey="workCurrent" fill="#3b82f6" name="Work Current (A)" />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">Voltage Quality (3-Phase)</h6>
+                      <ResponsiveContainer width="100%" height={250}>
+                        <LineChart data={voltageData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="day" style={{ fontSize: '10px' }} />
+                          <YAxis domain={[100, 130]} style={{ fontSize: '10px' }} />
+                          <Tooltip />
+                          <Legend />
+                          <Line type="monotone" dataKey="phase1" stroke="#3b82f6" strokeWidth={2} name="Phase 1 (V)" />
+                          <Line type="monotone" dataKey="phase2" stroke="#8b5cf6" strokeWidth={2} name="Phase 2 (V)" />
+                          <Line type="monotone" dataKey="phase3" stroke="#fbbf24" strokeWidth={2} name="Phase 3 (V)" />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-lg shadow-sm mb-6">
+                <div className="border-l-4 border-yellow-400 px-6 py-4 bg-yellow-50">
+                  <h2 className="text-lg font-semibold flex items-center gap-2">📈 Utilization</h2>
+                </div>
+                <div className="p-6">
+                  <div className="grid grid-cols-3 gap-6">
+                    <div className="col-span-2 bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                      <HeatmapChart title="Utilization Matrix (Hourly × Daily)" heatmapData={heatmapData} />
+                    </div>
+
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">Active Time</h6>
+                      <ResponsiveContainer width="100%" height={250}>
+                        <AreaChart data={runtimeData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="day" style={{ fontSize: '10px' }} />
+                          <YAxis style={{ fontSize: '10px' }} />
+                          <Tooltip />
+                          <Area type="monotone" dataKey="runtime" stackId="1" stroke="#8b5cf6" fill="#ddd6fe" name="Active" />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-lg shadow-sm mb-6">
+                <div className="border-l-4 border-yellow-400 px-6 py-4 bg-yellow-50">
+                  <h2 className="text-lg font-semibold flex items-center gap-2">💡 Energy Management</h2>
+                </div>
+                <div className="p-6">
+                  <div className="grid grid-cols-2 gap-6">
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">Energy Efficiency by Day</h6>
+                      <ResponsiveContainer width="100%" height={250}>
+                        <BarChart data={energyData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="day" style={{ fontSize: '10px' }} />
+                          <YAxis style={{ fontSize: '10px' }} />
+                          <Tooltip />
+                          <Bar dataKey="total" fill="#3b82f6" radius={[4, 4, 0, 0]} name="Total Energy (Wh)" />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">Energy per Hour Trend</h6>
+                      <ResponsiveContainer width="100%" height={250}>
+                        <LineChart data={energyData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="day" style={{ fontSize: '10px' }} />
+                          <YAxis style={{ fontSize: '10px' }} />
+                          <Tooltip />
+                          <Line type="monotone" dataKey="perHour" stroke="#fbbf24" strokeWidth={2} name="Wh/Hour" />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-lg shadow-sm mb-6">
+                <div className="border-l-4 border-yellow-400 px-6 py-4 bg-yellow-50">
+                  <h2 className="text-lg font-semibold flex items-center gap-2">⚠️ Anomaly Detection</h2>
+                </div>
+                <div className="p-6">
+                  <div className="grid grid-cols-3 gap-6">
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">Anomaly Detection Status</h6>
+                      <div className="text-center py-4">
+                        <div className="text-5xl font-bold text-yellow-500 mb-2">{stats.anomalyCount}</div>
+                        <div className="text-sm text-gray-500">Total Anomalies Detected</div>
+                      </div>
+                      <div className="mt-4 text-xs space-y-2">
+                        <div className="flex justify-between">
+                          <span>Critical:</span>
+                          <span className="font-bold text-red-500">{recentAnomalies.filter(a => a.severity === 'critical').length}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Warnings:</span>
+                          <span className="font-bold text-yellow-500">{recentAnomalies.filter(a => a.severity === 'warning').length}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">Anomaly Breakdown by Day</h6>
+                      <ResponsiveContainer width="100%" height={250}>
+                        <BarChart data={anomalyBreakdown}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="day" style={{ fontSize: '10px' }} />
+                          <YAxis style={{ fontSize: '10px' }} />
+                          <Tooltip />
+                          <Legend />
+                          <Bar dataKey="voltage" stackId="a" fill="#ec4899" name="Voltage" />
+                          <Bar dataKey="temperature" stackId="a" fill="#fbbf24" name="Temperature" />
+                          <Bar dataKey="current" stackId="a" fill="#8b5cf6" name="Current" />
+                          <Bar dataKey="error" stackId="a" fill="#ef4444" name="Error" />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">Recent Anomalies</h6>
+                      <div className="space-y-2">
+                        {recentAnomalies.map((item, idx) => (
+                          <div key={idx} className="flex items-center justify-between p-2 border border-gray-200 rounded text-xs">
+                            <div className="flex items-center gap-2">
+                              <span className={`w-5 h-5 rounded-full flex items-center justify-center text-white font-bold ${item.severity === 'critical' ? 'bg-red-500' : 'bg-yellow-400'}`}>!</span>
+                              <span>{item.type}</span>
+                            </div>
+                            <span className="text-gray-500">{new Date(item.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                          </div>
+                        ))}
+                        {recentAnomalies.length === 0 && (
+                          <div className="text-center text-gray-500 py-8">No anomalies detected</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-lg shadow-sm mb-6">
+                <div className="border-l-4 border-yellow-400 px-6 py-4 bg-yellow-50">
+                  <h2 className="text-lg font-semibold flex items-center gap-2">🛡️ Safety & Reliability</h2>
+                </div>
+                <div className="p-6">
+                  <div className="grid grid-cols-4 gap-6 mb-6">
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm text-center">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">E-Stop Activations</h6>
+                      <div className="text-4xl font-bold">{stats.eStops}</div>
+                      <div className="text-xs text-gray-500 mt-2">{stats.deviceId}</div>
+                    </div>
+
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm text-center">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">Cycle Errors</h6>
+                      <div className="text-4xl font-bold">{stats.cycleErrors}</div>
+                      <div className="text-xs text-gray-500 mt-2">{stats.deviceId}</div>
+                    </div>
+
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm text-center">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">Gate Violations</h6>
+                      <div className="text-4xl font-bold">{stats.gateViolations}</div>
+                      <div className="text-xs text-gray-500 mt-2">{stats.deviceId}</div>
+                    </div>
+
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">Digital Input Timeline</h6>
+                      <div className="space-y-2 text-xs max-h-40 overflow-y-auto">
+                        {digitalInputEvents.map((event, idx) => (
+                          <div key={idx} className="p-2 border border-gray-200 rounded">
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="font-semibold">{event.type}</span>
+                              <span className={`w-2 h-2 rounded-full ${event.status === 'success' ? 'bg-green-500' : 'bg-red-500'}`}></span>
+                            </div>
+                            <div className="text-gray-500 text-xs">
+                              {new Date(event.time).toLocaleString()}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-6">
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm text-center">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">MTBF (Mean Time Between Failures)</h6>
+                      <div className="text-4xl font-bold">{stats.mtbf}</div>
+                      <div className="text-xs text-gray-500 mt-2">Cycles</div>
+                    </div>
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm text-center">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">MTTR (Mean Time To Repair)</h6>
+                      <div className="text-4xl font-bold">{stats.mttr}</div>
+                      <div className="text-xs text-gray-500 mt-2">Minutes</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-lg shadow-sm mb-6">
+                <div className="border-l-4 border-yellow-400 px-6 py-4 bg-yellow-50">
+                  <h2 className="text-lg font-semibold flex items-center gap-2">📅 EOL Planning</h2>
+                </div>
+                <div className="p-6">
+                  <div className="grid grid-cols-3 gap-6">
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm text-center">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">Lifetime Cycles Completed</h6>
+                      <div className="text-5xl font-bold mb-2">{stats.totalCycles}</div>
+                    </div>
+
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm text-center">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">EOL Forecast</h6>
+                      <div className="text-5xl font-bold mb-2">{Math.round((500000 - stats.totalCycles) / Math.max(stats.avgCycleCount, 1))}</div>
+                      <div className="text-sm text-gray-500 mb-4">Days Remaining (est.)</div>
+                      <div className="text-left text-xs space-y-1">
+                        <div>Current Usage: <span className="font-semibold">{((stats.totalCycles / 500000) * 100).toFixed(1)}%</span></div>
+                        <div>Target Life: <span className="font-semibold">500,000 cycles</span></div>
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                      <h6 className="text-sm font-semibold text-gray-600 mb-4">Cycle Projection</h6>
+                      <ResponsiveContainer width="100%" height={200}>
+                        <LineChart data={cycleCountData.map((d, i) => ({ 
+                          day: d.day,
+                          projected: stats.totalCycles + (i * stats.avgCycleCount)
+                        }))}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="day" style={{ fontSize: '10px' }} />
+                          <YAxis style={{ fontSize: '10px' }} />
+                          <Tooltip />
+                          <Line type="monotone" dataKey="projected" stroke="#3b82f6" strokeDasharray="5 5" strokeWidth={2} name="Projected Cycles" />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
