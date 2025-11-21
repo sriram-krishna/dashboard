@@ -649,9 +649,17 @@ const KomarDashboard = () => {
             </div>
             <div className="flex items-center gap-4">
               <span className="text-stone-500">Time Period</span>
-              <div className="h-8 px-3 bg-white rounded shadow-sm flex items-center">
+              {/* <div className="h-8 px-3 bg-white rounded shadow-sm flex items-center">
                 <span className="text-zinc-900">Last 7 Days</span>
-              </div>
+              </div> */}
+              <select defaultValue="Last 7 Days" className="h-8 px-3 bg-white rounded shadow-sm text-zinc-900">
+                <option value="Today">Today</option>
+                <option value="Yesterday">Yesterday</option>
+                <option value="Last 7 Days">Last 7 Days</option>
+                <option value="Last 30 Days">Last 30 Days</option>
+                <option value="This Month">This Month</option>
+                <option value="Last Month">Last Month</option>
+              </select>
             </div>
           </div>
           <div className="text-zinc-900 text-sm">Last Updated: {new Date().toLocaleString()}</div>
