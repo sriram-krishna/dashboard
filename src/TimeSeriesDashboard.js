@@ -253,7 +253,7 @@ const MetricsCalculator = {
   },
 
   calculateChamberFullness: (realTimeData, cycles) => {
-    if (!realTimeData.length) return { percent: 0, color: 'bg-green-600', level: 'Low' };
+    if (!realTimeData.length) return { percent: 0, color: 'bg-yellow-400', level: 'Low' };
     
     const fullErrorIndices = realTimeData
       .map((r, idx) => r['DI8_Full_Error'] === 1 ? idx : -1)
@@ -268,7 +268,7 @@ const MetricsCalculator = {
     
     let color, level;
     if (fullnessPercent < 33) {
-      color = 'bg-green-600';
+      color = 'bg-yellow-400';
       level = 'Low';
     } else if (fullnessPercent < 67) {
       color = 'bg-yellow-400';
